@@ -28,26 +28,28 @@
 
 ---
 
-## 🚀 W2 进展 (7月28日启动)
+## ✅ W2 成果 (7月28日完成)
 
 ### 已完成
 - [x] 唯一性保证引擎 (FingerprintEngine + UniquenessGuarantor)
 - [x] Bloom Filter 实现 (20M 容量去重)
 - [x] Layer 1 随机骨架采样 (skeleton sampling)
 - [x] Layer 2 LLM Identity Seed prompt 模板
+- [x] **Layer 3：规则派生 + LLM 叙事续写**
+- [x] **Layer 4：一致性校验与修复**
+- [x] **学生生成器** (4-层完整管线)
+- [x] **教师生成器** (T-Model 参数)
+- [x] **家长生成器** (P-Model 参数)
+- [x] **集成测试** (4 个测试)
 
 ### 代码量新增
 - `src/persona_service/__init__.py`: 231 行 (指纹+去重)
-- `src/persona_service/identity_seed.py`: 155 行 (L1 + L2 生成)
-- 新增：**~400 行代码**
-
-### 接下来（W2 计划）
-- [ ] L3 Layer：规则派生 + LLM 叙事续写
-- [ ] L4 Layer：一致性校验
-- [ ] 学生生成器 (student_generator.py)
-- [ ] 教师生成器 (teacher_generator.py) 
-- [ ] 家长生成器 (parent_generator.py)
-- [ ] 画像管线整合脚本
+- `src/persona_service/identity_seed.py`: 155 行 (L1 + L2)
+- `src/persona_service/layers_3_4.py`: 236 行 (L3 + L4)
+- `src/persona_service/student_generator.py`: 207 行
+- `src/persona_service/teacher_parent_generator.py`: 255 行
+- `tests/test_w2_persona_generation.py`: 106 行
+- **W2 总计：~1,190 行代码**
 
 ---
 
@@ -56,7 +58,7 @@
 | 周 | 目标 | 完成度 | 交付物 |
 |-----|------|--------|--------|
 | W1 | 基础架构 + BKT | 100% | ✅ 数据层 + 认知引擎 |
-| **W2** | **画像系统** | **50%** | 🟠 唯一性引擎 + Layers 1-2 |
+| **W2** | **画像系统** | **100%** | ✅ 4层管线 + 学生/教师/家长生成 |
 | W3 | L-Model 多主体 | 0% | ⏳ 计划中 |
 | W4 | 干预传递 | 0% | ⏳ 计划中 |
 | W5 | 前端 + API | 0% | ⏳ 计划中 |
