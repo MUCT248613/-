@@ -1,0 +1,110 @@
+# Base configuration for VirtualStudent Sandbox v5.0
+system:
+  version: "5.0"
+  environment: development
+  log_level: INFO
+
+# Data layer
+data:
+  db_path: "data/virtual_student.db"
+  data_dir: "data/"
+  
+# Cognitive engine defaults
+cognitive:
+  bkt:
+    p_know_init: 0.2
+    p_learn: 0.25
+    p_slip: 0.1
+    p_guess: 0.1
+  actr:
+    decay_param: 0.5
+
+# Persona service (v5.0: LLM-deep)
+persona_service:
+  student_count: 500
+  teacher_count: 50
+  parent_per_student: [1, 2]
+  pipeline_stages: [sample_params, derive_fields, map_labels, validate_repair, render_narrative]
+  coherence_max_retry: 5
+  privacy_enforcement: strict
+  
+  # L2 LLM identity seed generation
+  llm_identity_seed:
+    model: "qwen-plus"
+    temperature: 1.0
+    batch_size: 8
+    
+  # L3 narrative continuation
+  llm_narrative:
+    model: "qwen-plus"
+    temperature: 0.7
+    
+  # Uniqueness guarantee
+  uniqueness:
+    bloom_filter_capacity: 20000000
+    bloom_filter_error_rate: 0.001
+    similarity_threshold: 0.85
+
+# L-Model (v4.0: multi-agent with network)
+l_model:
+  simulation_days: 90
+  time_granularity_min: 5
+  scenes: [school, shadow_edu, parent, self_study, fragment, social]
+  time_budget_tolerance_min: 30
+  fatigue_recovery_sleep: 0.8
+  fragment_learning_discount: 0.3
+  
+  # Multi-agent & network
+  multi_agent: true
+  social_network:
+    init_density: 0.15
+    selection_effect_strength: 0.3
+    influence_effect_strength: 0.4
+    
+  # Events
+  events:
+    scheduled: [exam, holiday, semester_transition]
+    random_library: "config/life_events.yaml"
+    impact_decay_model: exponential_half_life
+    
+  # Counterfactual
+  counterfactual:
+    enabled: true
+    max_branches: 5
+
+# Intervention delivery
+intervention_delivery:
+  delivery_models: [direct, teacher_mediated, parent_mediated, shadow_edu_mediated, self_study_mediated]
+  target_scenes: [school, shadow_edu, home, self_study, all]
+  teacher_fidelity_base: 0.8
+  
+  parent_style_multipliers:
+    autonomy_support: 0.2
+    content_explain: 0.05
+    control_monitor: -0.05
+    do_for_child: -0.1
+    
+  shadow_edu_dose_response:
+    lt_3h: 0.15
+    3_to_6h: 0.05
+    6_to_8h: -0.05
+    gt_8h: -0.15
+
+# Privacy (v5.0: P/R/S enforcement)
+privacy:
+  levels:
+    P: [identity, personality_tags, aptitudes, character_practice, interests]
+    R: [family, academics, health_public, school_context, after_school_public]
+    S: [private_sensitive, gifted_sen, parenting_style, family_conflict, tutoring_cost]
+
+# API & Frontend
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: true
+
+# Performance
+performance:
+  max_workers: 4
+  cache_enabled: true
+  cache_dir: "logs/cache/"
