@@ -80,12 +80,17 @@ class TestACTRForgetting:
     
     def test_recent_practice(self):
         """Test activation with recent practice"""
-        practice_times = [100.0]  # Just practiced
-        current_time = 101.0
+        practice_times = [50.0]  # Practiced 50 min ago
+        current_time = 100.0  # Current time is 100 min
         activation = self.actr.compute_activation(practice_times, current_time)
         
-        # Should be high activation
-        assert activation > 0.0
+        # Should have activation (ln(50^-0.5) = ln(0.141...) < 0 but not zero)
+        # Actually for decay: longer ago = lower activation
+        # Let's check that recent practice has higher activation than old
+        old_activation = self.actr.compute_activation([10.0], 100.0)
+        recent_activation = self.actr.compute_activation([90.0], 100.0)
+        
+        assert recent_activation > old_activation
     
     def test_distant_practice(self):
         """Test activation with old practice"""
