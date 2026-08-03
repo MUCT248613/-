@@ -1,0 +1,39 @@
+# Teacher Demographics Norms
+# Reference: 技术设计文档 §4.4 teacher_demographics.yaml
+# Source approximation: national education statistics. TODO: refine after pilot.
+
+teacher_demographics:
+  experience_years:
+    mean: 12.0
+    sd: 7.0
+    p25: 6.0
+    p50: 11.0
+    p75: 17.0
+
+  title_distribution:        # professional title
+    三级教师: 0.15
+    二级教师: 0.30
+    一级教师: 0.35
+    高级教师: 0.17
+    正高级教师: 0.03
+
+  education_distribution:
+    专科: 0.15
+    本科: 0.65
+    硕士: 0.18
+    博士: 0.02
+
+  subject_distribution:
+    数学: 0.20
+    语文: 0.20
+    英语: 0.20
+    物理: 0.10
+    化学: 0.10
+    生物: 0.05
+    其他: 0.15
+
+  teaching_style:
+    自主支持型: 0.30
+    控制型: 0.25
+    放任型: 0.15
+    均衡型: 0.30

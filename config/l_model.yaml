@@ -1,0 +1,26 @@
+# L-Model 2.0 Configuration (M4)
+# Reference: 技术设计文档 附录 config/l_model.yaml (v4.0)
+
+simulation_days: 90            # v4.0 default 90 days (one semester), supports 1-1095
+time_granularity_min: 5
+scenes: [school, shadow_edu, parent, self_study, fragment, social]  # social scene added
+time_budget_tolerance_min: 30
+fatigue_recovery_sleep: 0.8
+fragment_learning_discount: 0.3
+
+# v4.0 additions
+multi_agent: true
+
+social_network:
+  init_density: 0.15
+  selection_effect_strength: 0.3   # selection effect (homophily)
+  influence_effect_strength: 0.4   # influence effect (convergence)
+
+events:
+  scheduled: [exam, holiday, semester_transition]
+  random_library: life_events.yaml  # 30+ event types
+  impact_decay_model: exponential_half_life
+
+counterfactual:
+  enabled: true
+  max_branches: 5

@@ -1,0 +1,29 @@
+# Daily Schedule / Time-use Norms
+# Reference: 技术设计文档 §4.4 daily_schedule.yaml
+# Source approximation: public time-use statistics. TODO: refine after pilot.
+
+daily_schedule:
+  school_hours:            # weekday in-school time (hours)
+    mean: 8.5
+    sd: 1.0
+  homework_hours:          # weekday homework (hours)
+    mean: 2.0
+    sd: 0.8
+  sleep_hours:             # nightly sleep (hours)
+    mean: 7.5
+    sd: 0.9
+  screen_time_hours:       # recreational screen time (hours)
+    mean: 1.5
+    sd: 1.0
+  exercise_hours:          # physical activity (hours/week)
+    mean: 4.0
+    sd: 2.5
+
+scene_time_budget_min:     # L-Model daily scene allocation (minutes)
+  school: 480
+  shadow_edu: 90
+  parent: 60
+  self_study: 90
+  fragment: 45
+  social: 60
+  sleep: 450

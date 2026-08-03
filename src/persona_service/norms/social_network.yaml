@@ -1,0 +1,25 @@
+# Social Network Norms
+# Placeholder norms for peer network initialization. TODO: calibrate after pilot.
+
+social_network:
+  init_density: 0.15          # initial edge density
+  avg_friendships_per_student:
+    mean: 4.0
+    sd: 2.0
+  selection_effect_strength: 0.3   # homophily (academic similarity -> tie)
+  influence_effect_strength: 0.4   # social influence (tie -> academic convergence)
+
+relationship_distribution:
+  friendship: 0.70
+  romantic: 0.08
+  conflict: 0.07
+  mentor: 0.05
+  acquaintance: 0.10
+
+romance_prevalence_by_grade:
+  7: 0.03
+  8: 0.06
+  9: 0.10
+  10: 0.15
+  11: 0.18
+  12: 0.20

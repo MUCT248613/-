@@ -1,0 +1,28 @@
+# Learning Style & Study Habit Norms
+# Placeholder norms. TODO: calibrate after pilot.
+
+learning_style:
+  distribution:
+    视觉型: 0.35
+    听觉型: 0.20
+    动觉型: 0.25
+    读写型: 0.20
+
+study_habits:
+  regularity:              # 0-1 consistency of study routine
+    mean: 0.55
+    sd: 0.18
+  deep_processing:         # 0-1 tendency toward deep learning
+    mean: 0.50
+    sd: 0.17
+  help_seeking:            # 0-1 propensity to ask for help
+    mean: 0.48
+    sd: 0.19
+
+fragment_learning:
+  efficiency:              # 0-1 efficiency of fragmented learning
+    mean: 0.35
+    sd: 0.15
+  daily_minutes:
+    mean: 40
+    sd: 25

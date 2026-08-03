@@ -235,6 +235,47 @@ class DataLayer:
                 timestamp_ms BIGINT
             )
         """)
+        
+        # ============ v3.0/v4.0 additional tables ============
+        
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS classes (
+                class_id VARCHAR PRIMARY KEY,
+                school_id VARCHAR,
+                teacher_id VARCHAR,
+                climate_json JSON,                  -- class climate (cohesion/competition/support)
+                student_count INTEGER
+            )
+        """)
+        
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS schools (
+                school_id VARCHAR PRIMARY KEY,
+                profile_json JSON                   -- school profile (type/resources/culture)
+            )
+        """)
+        
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS counterfactual_runs (
+                cf_id VARCHAR PRIMARY KEY,
+                base_run_id VARCHAR,
+                branch_run_id VARCHAR,
+                modification_json JSON,             -- the modification applied to branch
+                comparison_json JSON                -- trajectory comparison result
+            )
+        """)
+        
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS provenance (
+                prov_id VARCHAR PRIMARY KEY,
+                run_id VARCHAR,
+                entity_type VARCHAR,                -- student / teacher / parent / event / edge
+                entity_id VARCHAR,
+                source VARCHAR,                     -- llm / rule / real_data / derived
+                lineage_json JSON,                  -- full derivation chain
+                timestamp_ms BIGINT
+            )
+        """)
     
     def close(self):
         """Close database connection"""

@@ -1,0 +1,30 @@
+# Shadow Education (After-school Tutoring) Norms
+# Reference: 技术设计文档 §4.4 shadow_education.yaml
+# Source approximation: CEPS/CFPS magnitude. TODO: refine after pilot.
+
+shadow_education:
+  weekly_hours:
+    mean: 4.5
+    sd: 3.0
+    p25: 2.0
+    p50: 4.0
+    p75: 6.0
+    p90: 8.0
+  participation_rate: 0.65   # fraction of students attending any tutoring
+
+dose_response:               # achievement effect by weekly hours
+  lt_3h: 0.15
+  3_to_6h: 0.05
+  6_to_8h: -0.05
+  gt_8h: -0.15
+
+type_distribution:
+  学科补习: 0.55
+  兴趣特长: 0.25
+  竞赛培训: 0.10
+  一对一: 0.10
+
+monthly_cost_yuan:
+  mean: 1500
+  sd: 1200
+  p50: 1200

@@ -1,0 +1,168 @@
+// LLM Settings page - configure the Qwen model backend (Aliyun Bailian / DashScope)
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import api from '../api.js'
+
+// Default preset for the Aliyun Bailian (百炼) Token Plan OpenAI-compatible
+// endpoint. Token Plan (套餐计费) uses a dedicated base URL, distinct from the
+// pay-as-you-go (按量计费) DashScope endpoint; model names are identical.
+const DEFAULT_BASE_URL = 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
+// DashScope model ids are case-sensitive and must be LOWERCASE. flash is the
+// default: fast and cheap, adequate for persona generation (no need for plus/max).
+const DEFAULT_MODEL = 'qwen3.7-flash'
+
+export default function LLMSettingsPage() {
+  const navigate = useNavigate()
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [config, setConfig] = useState(null)
+  const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL)
+  const [model, setModel] = useState(DEFAULT_MODEL)
+  const [apiKey, setApiKey] = useState('')
+  const [error, setError] = useState(null)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getLLMConfig()
+      .then((cfg) => {
+        if (cancelled) return
+        setConfig(cfg)
+        setBaseUrl(cfg.base_url || DEFAULT_BASE_URL)
+        setModel(cfg.default_model || DEFAULT_MODEL)
+      })
+      .catch((e) => !cancelled && setError(e.message))
+      .finally(() => !cancelled && setLoading(false))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    setSaved(false)
+    try {
+      const payload = { base_url: baseUrl, default_model: model }
+      if (apiKey.trim()) payload.api_key = apiKey.trim()
+      const cfg = await api.updateLLMConfig(payload)
+      setConfig(cfg)
+      setApiKey('')
+      setSaved(true)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleReset = () => {
+    setBaseUrl(DEFAULT_BASE_URL)
+    setModel(DEFAULT_MODEL)
+  }
+
+  if (loading) return <div className="main loading">加载中…</div>
+
+  // 常用模型仅作输入建议（datalist），模型名可自由填写
+  const modelOptions = [...(config?.available_models || [])]
+
+  return (
+    <div className="main" style={{ maxWidth: 860, margin: '0 auto' }}>
+      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <div>
+          <h2>大模型配置</h2>
+          <p>
+            配置驱动身份种子生成与叙事合成的 Qwen 大模型 · 已预设阿里云百炼 Token Plan（套餐）端点，填写 API Key 即可启用
+          </p>
+        </div>
+        <button className="secondary" onClick={() => navigate('/')} style={{ flexShrink: 0 }}>
+          ← 返回首页
+        </button>
+      </div>
+
+      {error && <div className="error-box">{error}</div>}
+      {saved && (
+        <div className="privacy-note" style={{ color: 'var(--accent-2)', borderColor: 'var(--accent-2)', background: 'rgba(56,199,164,0.1)' }}>
+          {config?.is_live
+            ? '✓ 配置已保存，大模型已连接（实时模式）'
+            : '✓ 配置已保存（当前仍为离线模式，请检查 API Key 是否正确）'}
+        </div>
+      )}
+
+      <div className="card">
+        <h3>连接状态</h3>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="muted">当前状态：</span>
+          {config?.is_live ? (
+            <span className="badge green">已连接 · 实时模型</span>
+          ) : (
+            <span className="badge">离线模式（确定性 Mock）</span>
+          )}
+          {config?.api_key_set && <span className="badge accent">API Key：{config.api_key_masked}</span>}
+        </div>
+        <p className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+          未配置 API Key 时系统自动使用确定性离线模式，全部功能仍可运行（用于测试与演示）。
+        </p>
+      </div>
+
+      <div className="card">
+        <h3>模型参数</h3>
+
+        <div className="field">
+          <label>Base URL</label>
+          <input
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder={DEFAULT_BASE_URL}
+            style={{ width: '100%' }}
+          />
+          <span className="muted" style={{ fontSize: 11 }}>阿里云百炼 Token Plan OpenAI 兼容端点（默认已填好，与按量计费地址不同）</span>
+        </div>
+
+        <div className="field">
+          <label>模型名称</label>
+          <input
+            list="llm-model-options"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder={DEFAULT_MODEL}
+            style={{ width: '100%' }}
+          />
+          <datalist id="llm-model-options">
+            {modelOptions.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          <span className="muted" style={{ fontSize: 11 }}>可从常用模型中选择，也可直接输入任意模型名称（如 qwen3.7-max，注意必须小写）</span>
+        </div>
+
+        <div className="field">
+          <label>API Key</label>
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={config?.api_key_set ? '已配置（留空则保持不变）' : '粘贴阿里云百炼 Token Plan API Key'}
+            style={{ width: '100%' }}
+            autoComplete="off"
+          />
+          <span className="muted" style={{ fontSize: 11 }}>
+            在{' '}
+            <a href="https://bailian.console.aliyun.com/" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>
+              阿里云百炼控制台
+            </a>{' '}
+            获取。保存后不会明文回显。
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={handleSave} disabled={saving}>
+            {saving ? '保存中…' : '保存配置'}
+          </button>
+          <button className="secondary" onClick={handleReset}>恢复百炼默认</button>
+        </div>
+      </div>
+    </div>
+  )
+}

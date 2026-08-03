@@ -1,0 +1,31 @@
+# Family Structure Demographic Norms
+# Reference: 技术设计文档 §4.4 family_structure.yaml
+# Source approximation: national census / education statistics. TODO: refine after pilot.
+
+family_structure:
+  完整家庭: 0.80
+  单亲家庭: 0.10
+  留守家庭: 0.07
+  重组家庭: 0.03
+
+parents_education:
+  初中及以下: 0.35
+  高中/中专: 0.25
+  大专: 0.15
+  本科: 0.18
+  硕士及以上: 0.07
+
+parents_occupation:
+  务工: 0.30
+  务农: 0.15
+  个体经营: 0.15
+  企事业单位: 0.20
+  专业技术: 0.10
+  其他: 0.10
+
+parenting_style:
+  权威型: 0.35
+  专制型: 0.25
+  放任型: 0.20
+  忽视型: 0.10
+  民主型: 0.10

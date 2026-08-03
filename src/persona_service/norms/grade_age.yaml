@@ -1,0 +1,27 @@
+# Grade / Age Norms
+# Placeholder norms. TODO: calibrate after pilot.
+
+grade:
+  default_grade: 8          # target grade for generated students
+  age_by_grade:             # typical age for each grade
+    6: 12
+    7: 13
+    8: 14
+    9: 15
+    10: 16
+    11: 17
+    12: 18
+
+achievement_by_grade:       # entering achievement (0-100) by grade
+  7:
+    mean: 64.0
+    sd: 13.0
+  8:
+    mean: 62.0
+    sd: 14.0
+  9:
+    mean: 60.0
+    sd: 15.0
+
+grade_retention_rate: 0.02
+grade_acceleration_rate: 0.01

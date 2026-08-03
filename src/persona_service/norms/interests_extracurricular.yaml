@@ -1,0 +1,22 @@
+# Interests & Extracurricular Norms
+# Placeholder norms. TODO: calibrate after pilot.
+
+interests:
+  category_distribution:
+    体育运动: 0.22
+    音乐艺术: 0.18
+    科技编程: 0.12
+    阅读写作: 0.15
+    游戏电竞: 0.15
+    社交活动: 0.10
+    其他: 0.08
+
+extracurricular:
+  weekly_hours:
+    mean: 3.0
+    sd: 2.0
+  participation_rate: 0.70
+
+hobbies_count:
+  mean: 2.2
+  sd: 1.1

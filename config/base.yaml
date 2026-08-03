@@ -100,8 +100,11 @@ privacy:
 # API & Frontend
 api:
   host: "0.0.0.0"
-  port: 8000
+  port: 6668
   reload: true
+
+frontend:
+  port: 4000
 
 # Performance
 performance:

@@ -30,7 +30,7 @@ class TestDataLayer:
         
         # Check that tables exist
         tables = temp_db.query(
-            "SELECT name FROM duckdb_tables() WHERE type = 'table'"
+            "SELECT table_name FROM duckdb_tables()"
         )
         table_names = [row[0] if isinstance(row, tuple) else row for row in tables]
         

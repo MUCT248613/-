@@ -1,0 +1,28 @@
+# School & Class Climate Norms
+# Placeholder norms. TODO: calibrate after pilot.
+
+school:
+  type_distribution:
+    公办重点: 0.25
+    公办普通: 0.45
+    民办: 0.20
+    乡镇中学: 0.10
+  resource_level:
+    mean: 0.55
+    sd: 0.20
+  academic_pressure:
+    mean: 0.60
+    sd: 0.18
+
+class:
+  climate_distribution:
+    高凝聚高竞争: 0.25
+    高凝聚低竞争: 0.30
+    低凝聚高竞争: 0.20
+    均衡发展型: 0.25
+  cohesion:
+    mean: 0.58
+    sd: 0.17
+  peer_support:
+    mean: 0.55
+    sd: 0.18

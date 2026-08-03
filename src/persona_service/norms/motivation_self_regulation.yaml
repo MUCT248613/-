@@ -1,0 +1,31 @@
+# Motivation & Self-regulation Norms
+# Placeholder norms. TODO: calibrate after pilot.
+
+motivation:
+  intrinsic_motivation:    # 0-1
+    mean: 0.55
+    sd: 0.18
+  extrinsic_motivation:
+    mean: 0.60
+    sd: 0.16
+  self_efficacy:
+    mean: 0.55
+    sd: 0.17
+  achievement_goal_orientation:
+    mastery: 0.45
+    performance_approach: 0.30
+    performance_avoid: 0.25
+
+self_regulation:
+  self_regulation:         # 0-1
+    mean: 0.52
+    sd: 0.18
+  strategy_repertoire:     # 0-1
+    mean: 0.50
+    sd: 0.17
+  procrastination:
+    mean: 0.40
+    sd: 0.20
+  grit:
+    mean: 0.55
+    sd: 0.16

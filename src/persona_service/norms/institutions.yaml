@@ -1,0 +1,25 @@
+# Institution Norms (school / class / shadow-edu provider)
+# Placeholder norms. TODO: calibrate after pilot.
+
+institution:
+  school_culture:
+    学术导向: 0.30
+    全面发展: 0.25
+    纪律严明: 0.20
+    宽松自由: 0.15
+    艺体特色: 0.10
+
+  shadow_edu_style:
+    应试强化型: 0.35
+    兴趣拓展型: 0.25
+    一对一辅导: 0.15
+    小班精品: 0.15
+    线上远程: 0.10
+
+  shadow_edu_quality:
+    mean: 0.55
+    sd: 0.20
+
+  shadow_edu_hourly_cost_yuan:
+    mean: 180
+    sd: 120

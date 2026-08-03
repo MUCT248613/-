@@ -1,0 +1,43 @@
+# Big Five Personality Norms (Adolescent)
+# Reference: 技术设计文档 §4.4 personality_map.yaml
+# Values are placeholder norms; TODO: calibrate against adolescent norms after pilot.
+
+big5:
+  openness:
+    mean: 0.55
+    sd: 0.15
+    description: 开放性 - 青少年常模
+  conscientiousness:
+    mean: 0.55
+    sd: 0.15
+    description: 尽责性 - 青少年常模
+  extraversion:
+    mean: 0.52
+    sd: 0.16
+    description: 外向性 - 青少年常模
+  agreeableness:
+    mean: 0.56
+    sd: 0.14
+    description: 宜人性 - 青少年常模
+  neuroticism:
+    mean: 0.48
+    sd: 0.17
+    description: 神经质 - 青少年常模
+
+mbti_distribution:
+  INTJ: 0.05
+  INTP: 0.06
+  ENTJ: 0.04
+  ENTP: 0.06
+  INFJ: 0.05
+  INFP: 0.08
+  ENFJ: 0.05
+  ENFP: 0.09
+  ISTJ: 0.10
+  ISFJ: 0.10
+  ESTJ: 0.06
+  ESFJ: 0.08
+  ISTP: 0.06
+  ISFP: 0.06
+  ESTP: 0.04
+  ESFP: 0.02

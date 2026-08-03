@@ -1,0 +1,140 @@
+# Life Events Library (30+ event types) with half-life decay parameters
+# Reference: 技术设计文档 §4.6 EventEngine, config/l_model.yaml events.random_library
+# impact_decay_model: exponential_half_life -> impact(t) = impact_0 * 0.5^(t/half_life)
+
+events:
+  # ---- Academic domain ----
+  exam_success:
+    domain: academic
+    severity: 2
+    base_rate: 0.05
+    achievement_delta: 3.0
+    motivation_delta: 0.08
+    half_life_days: 14
+  exam_fail:
+    domain: academic
+    severity: 3
+    base_rate: 0.06
+    achievement_delta: -5.0
+    motivation_delta: -0.10
+    half_life_days: 7
+  award_won:
+    domain: academic
+    severity: 2
+    base_rate: 0.02
+    achievement_delta: 2.0
+    motivation_delta: 0.12
+    half_life_days: 21
+  public_praise:
+    domain: academic
+    severity: 1
+    base_rate: 0.08
+    achievement_delta: 1.0
+    motivation_delta: 0.05
+    half_life_days: 5
+  public_criticism:
+    domain: academic
+    severity: 2
+    base_rate: 0.05
+    achievement_delta: -1.5
+    motivation_delta: -0.06
+    half_life_days: 6
+
+  # ---- Family domain ----
+  family_conflict:
+    domain: family
+    severity: 4
+    base_rate: 0.03
+    achievement_delta: -3.0
+    stress_delta: 15.0
+    half_life_days: 10
+  parent_divorce:
+    domain: family
+    severity: 5
+    base_rate: 0.005
+    achievement_delta: -6.0
+    stress_delta: 25.0
+    half_life_days: 60
+  family_economic_shock:
+    domain: family
+    severity: 4
+    base_rate: 0.01
+    achievement_delta: -3.5
+    stress_delta: 18.0
+    half_life_days: 45
+  positive_family_event:
+    domain: family
+    severity: 2
+    base_rate: 0.04
+    achievement_delta: 1.5
+    emotion_delta: 10.0
+    half_life_days: 10
+
+  # ---- Social domain ----
+  friendship_formed:
+    domain: social
+    severity: 1
+    base_rate: 0.07
+    emotion_delta: 8.0
+    motivation_delta: 0.03
+    half_life_days: 14
+  friendship_conflict:
+    domain: social
+    severity: 2
+    base_rate: 0.05
+    emotion_delta: -8.0
+    stress_delta: 8.0
+    half_life_days: 7
+  romance_start:
+    domain: social
+    severity: 3
+    base_rate: 0.02
+    emotion_delta: 12.0
+    study_time_delta: -30
+    half_life_days: 30
+  breakup:
+    domain: social
+    severity: 4
+    base_rate: 0.01
+    emotion_delta: -15.0
+    stress_delta: 15.0
+    half_life_days: 21
+  bullying_incident:
+    domain: social
+    severity: 5
+    base_rate: 0.008
+    emotion_delta: -18.0
+    stress_delta: 22.0
+    half_life_days: 40
+
+  # ---- Health domain ----
+  minor_illness:
+    domain: health
+    severity: 2
+    base_rate: 0.04
+    fatigue_delta: 20.0
+    study_time_delta: -60
+    half_life_days: 5
+  sleep_deprivation_streak:
+    domain: health
+    severity: 2
+    base_rate: 0.05
+    fatigue_delta: 15.0
+    achievement_delta: -1.0
+    half_life_days: 4
+
+  # ---- Emotional domain ----
+  confidence_boost:
+    domain: emotional
+    severity: 1
+    base_rate: 0.06
+    motivation_delta: 0.06
+    emotion_delta: 6.0
+    half_life_days: 7
+  anxiety_episode:
+    domain: emotional
+    severity: 3
+    base_rate: 0.03
+    stress_delta: 12.0
+    emotion_delta: -8.0
+    half_life_days: 9

@@ -1,0 +1,27 @@
+# Health & Wellbeing Norms (public-level only; S-level mental health excluded)
+# Placeholder norms. TODO: calibrate after pilot.
+
+health_public:
+  sleep_quality:           # 0-1
+    mean: 0.65
+    sd: 0.16
+  physical_health:
+    mean: 0.75
+    sd: 0.14
+  exercise_frequency_weekly:
+    mean: 3.0
+    sd: 1.8
+
+wellbeing:
+  life_satisfaction:       # 0-1
+    mean: 0.62
+    sd: 0.16
+  school_belonging:
+    mean: 0.60
+    sd: 0.17
+  stress_baseline:         # 0-100
+    mean: 38.0
+    sd: 12.0
+  fatigue_baseline:        # 0-100
+    mean: 32.0
+    sd: 11.0

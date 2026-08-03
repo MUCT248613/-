@@ -18,6 +18,10 @@ class IdentitySeed:
     core_personality_seed: str
     unique_life_seed: str  # One influential early experience
     generated_by: str = "llm"
+    # Gender implied by the name ("男"/"女"). Single source of truth so the
+    # archive D1 gender and the top-level M/F flag stay consistent with the
+    # name; empty means "unknown" and is resolved downstream.
+    gender: str = ""
 
 
 class IdentitySeedGenerator:
@@ -58,6 +62,7 @@ class IdentitySeedGenerator:
 返回一个 JSON 数组，包含 {batch_size} 个对象，每个对象包含：
 {{
   "name": "独特的中文名字",
+  "gender": "男 或 女（必须与名字的气质一致，不要给男生起女性化名字、给女生起男性化名字）",
   "birth_place": "具体到区县的出生地",
   "family_structure_type": "完整家庭 | 单亲 | 留守 | 重组",
   "core_personality_seed": "一句话描述核心人格倾向",
@@ -83,7 +88,8 @@ class IdentitySeedGenerator:
                         birth_place=item.get("birth_place", ""),
                         family_structure_type=item.get("family_structure_type", "完整家庭"),
                         core_personality_seed=item.get("core_personality_seed", ""),
-                        unique_life_seed=item.get("unique_life_seed", "")
+                        unique_life_seed=item.get("unique_life_seed", ""),
+                        gender=item.get("gender", "")
                     )
                     seeds.append(seed)
                 return seeds
@@ -95,7 +101,8 @@ class IdentitySeedGenerator:
                     birth_place=item.get("birth_place", ""),
                     family_structure_type=item.get("family_structure_type", "完整家庭"),
                     core_personality_seed=item.get("core_personality_seed", ""),
-                    unique_life_seed=item.get("unique_life_seed", "")
+                    unique_life_seed=item.get("unique_life_seed", ""),
+                    gender=item.get("gender", "")
                 )]
         except json.JSONDecodeError:
             return []
@@ -148,7 +155,11 @@ class Layer1SkeletonGenerator:
         
         # Add other fixed constraints
         skeleton["region"] = "县城"  # From config
-        skeleton["ses_level"] = "中等"
+        # Sample family SES from a realistic county-town distribution instead of
+        # hard-coding "中等", so student/family backgrounds -- and the parent
+        # personas derived from them -- span the full 低/中等/高 range.
+        skeleton["ses_level"] = np.random.choice(
+            ["低", "中等", "高"], p=[0.25, 0.55, 0.20])
         skeleton["misconception_type"] = "代数"
         
         return skeleton

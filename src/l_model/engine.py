@@ -1,23 +1,26 @@
 """
-L-Model 2.0: Multi-Agent Life Timeline Engine (v4.0)
+L-Model 2.0: Multi-Agent Life Timeline Engine (v5.0)
 Continuous 7×24 simulation with social network, events, relationships
 
 Key features:
 - Multi-agent parallel execution
-- Social network evolution (networkx)
-- Event engine (scheduled + random)
-- Relationship state machine
-- Continuous time with scene switching
+- Social network evolution (homophily + influence)
+- Event engine (scheduled + random with half-life decay)
+- Relationship state machine (romantic, peer, teacher, parent)
+- Continuous time with scene switching (5 scenes × ~288 min)
 - Life course trajectory recording
 
 Reference: 技术设计文档 §4.6, 需求说明文档 §4.2
 """
 from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-import networkx as nx
 import numpy as np
 import json
+
+from .social_network import SocialNetworkEngine, DynamicNetworkMonitor
+from .event_engine import EventEngine, EventLogger, Event
+from .relationship import RelationshipStateMachine, RelationshipType, RelationshipUpdateEngine
 
 
 @dataclass
@@ -41,153 +44,43 @@ class DayTimeline:
     fatigue_end: float
     stress_end: float
     emotion_end: float
-
-
-class SocialNetworkEngine:
-    """
-    Social network evolution with selection + influence effects
-    
-    References:
-    - Selection effect: homophily, students with similar achievement cluster
-    - Influence effect: students on same edge converge in achievement
-    """
-    
-    def __init__(self, n_students: int, init_density: float = 0.15):
-        """
-        Args:
-            n_students: Number of students in network
-            init_density: Initial network edge density
-        """
-        self.graph = nx.Graph()
-        
-        # Initialize nodes (students)
-        for i in range(n_students):
-            self.graph.add_node(f"S{i:04d}")
-        
-        # Initialize edges (friendships) - random initialization
-        n_possible_edges = n_students * (n_students - 1) // 2
-        n_edges = int(n_possible_edges * init_density)
-        
-        nodes = list(self.graph.nodes())
-        edges = []
-        attempts = 0
-        while len(edges) < n_edges and attempts < n_edges * 10:
-            i, j = np.random.choice(n_students, 2, replace=False)
-            if (nodes[i], nodes[j]) not in edges:
-                edges.append((nodes[i], nodes[j]))
-                self.graph.add_edge(nodes[i], nodes[j], weight=0.5)
-            attempts += 1
-    
-    def propagate_influence(self, students: Dict, day: int) -> Dict:
-        """
-        Propagate achievement influence along edges
-        
-        Δach_i = Σ_j (w_ij × (ach_j - ach_i) × susceptibility_i)
-        """
-        influence_effects = {}
-        
-        for node_i in self.graph.nodes():
-            student_i = students.get(node_i, {})
-            achievement_i = student_i.get("achievement_score", 50)
-            susceptibility = student_i.get("susceptibility", 0.1)
-            
-            total_influence = 0.0
-            neighbors = list(self.graph.neighbors(node_i))
-            
-            for node_j in neighbors:
-                student_j = students.get(node_j, {})
-                achievement_j = student_j.get("achievement_score", 50)
-                
-                weight = self.graph[node_i][node_j]["weight"]
-                influence = weight * (achievement_j - achievement_i) * susceptibility
-                total_influence += influence
-            
-            influence_effects[node_i] = total_influence
-        
-        return influence_effects
-    
-    def update_edges(self, students: Dict) -> None:
-        """
-        Update edge weights based on similarity (homophily)
-        Similar students strengthen edges, dissimilar students weaken
-        """
-        for (u, v) in self.graph.edges():
-            student_u = students.get(u, {})
-            student_v = students.get(v, {})
-            
-            # Similarity based on achievement
-            ach_u = student_u.get("achievement_score", 50)
-            ach_v = student_v.get("achievement_score", 50)
-            similarity = 1.0 - min(abs(ach_u - ach_v) / 100, 1.0)
-            
-            # Update weight (decay + similarity boost)
-            current_weight = self.graph[u][v]["weight"]
-            new_weight = 0.9 * current_weight + 0.1 * similarity
-            self.graph[u][v]["weight"] = new_weight
-
-
-class EventEngine:
-    """
-    Scheduled and random event generation
-    
-    Scheduled: 考试, 假期, 学期转换
-    Random: 考砸, 表白, 获奖, 家庭变故 (按半衰期衰减)
-    """
-    
-    SCHEDULED_EVENTS = {
-        "exam": {"days": [60, 120], "fatigue_impact": 5, "stress_impact": 3},
-        "holiday": {"days": [90], "motivation_boost": 2, "fatigue_recovery": 10},
-        "semester_transition": {"days": [90], "social_impact": 2}
-    }
-    
-    RANDOM_EVENTS = {
-        "exam_fail": {"probability": 0.02, "fatigue": -2, "motivation": -0.1, "half_life": 7},
-        "confession": {"probability": 0.01, "emotion": 5, "learning_distraction": -0.1, "half_life": 14},
-        "achievement": {"probability": 0.03, "motivation": 0.1, "emotion": 2, "half_life": 21},
-        "family_incident": {"probability": 0.01, "stress": 3, "motivation": -0.15, "half_life": 30}
-    }
-    
-    @staticmethod
-    def should_trigger_scheduled(sim_day: int, event_type: str) -> bool:
-        """Check if scheduled event should occur"""
-        days = EventEngine.SCHEDULED_EVENTS.get(event_type, {}).get("days", [])
-        return sim_day in days
-    
-    @staticmethod
-    def generate_random_events(sim_day: int) -> List[Tuple[str, float]]:
-        """
-        Generate random events for a given day
-        
-        Returns: List of (event_type, impact_multiplier)
-        """
-        events = []
-        for event_type, config in EventEngine.RANDOM_EVENTS.items():
-            prob = config.get("probability", 0.01)
-            if np.random.random() < prob:
-                # Impact decays with half-life
-                half_life = config.get("half_life", 7)
-                # For today, impact = 1.0; decay exponentially
-                impact_mult = 1.0
-                events.append((event_type, impact_mult))
-        
-        return events
+    # Post-update state (recorded after network influence + intervention
+    # delivery for the day) so life-course curves reflect the real dynamics.
+    achievement_end: float = 0.0
+    motivation_end: float = 0.5
 
 
 class LifeTimeEngineV2:
     """
-    Master L-Model 2.0 orchestrator
+    Master L-Model 2.0 orchestrator with full feature integration
     
-    Manages multi-agent parallel simulation with network, events, relationships
+    Manages multi-agent parallel simulation with:
+    - Social network evolution (from social_network.py)
+    - Events (from event_engine.py)
+    - Relationships (from relationship.py)
     """
     
     def __init__(self, students: List[Dict], teachers: List[Dict], 
-                 parents: List[Dict], social_network: SocialNetworkEngine = None):
+                 parents: List[Dict], social_network: SocialNetworkEngine = None,
+                 seed: int = None):
         self.students = {s["student_id"]: s for s in students}
         self.teachers = {t["teacher_id"]: t for t in teachers}
         self.parents = {p["parent_id"]: p for p in parents}
         
-        self.network = social_network or SocialNetworkEngine(len(students))
-        self.event_engine = EventEngine()
+        # Initialize engines. Build the default network on the *real* student
+        # ids so influence propagation actually reaches the cohort (the old
+        # hard-coded S{i:04d} naming silently mismatched 5-digit ids).
+        self.network = social_network or SocialNetworkEngine(
+            node_ids=list(self.students.keys()), seed=seed)
+        self.event_engine = EventEngine(seed=seed)
+        self.event_logger = EventLogger()
+        self.network_monitor = DynamicNetworkMonitor()
+        
+        # Relationship management
+        self.relationship_manager = RelationshipStateMachine()
+        self.relationship_updater = RelationshipUpdateEngine(self.relationship_manager)
+        
+        # Results
         self.timelines = []  # Accumulated timelines
     
     def simulate_day(self, student_id: str, sim_date: str, 
@@ -274,51 +167,112 @@ class LifeTimeEngineV2:
             emotion_end=student.get("emotion", 50)
         )
     
-    def simulate(self, days: int = 90, interventions: List[Dict] = None) -> Dict:
+    def simulate(self, days: int = 90, interventions: List[Dict] = None,
+                 intervention_engine=None, progress_callback=None) -> Dict:
         """
-        Full multi-day simulation
+        Full multi-day simulation with all L-Model 2.0 features
         
-        Returns simulation result with trajectories, network evolution, events log
+        Args:
+            days: Number of days to simulate
+            interventions: (legacy) list passed through to simulate_day
+            intervention_engine: Optional InterventionDeliveryEngine. When
+                provided, every active intervention is applied to its student
+                each day (mediated by real teacher fidelity / parent
+                involvement), so the simulated achievement trajectories respond
+                to the experimental manipulation. This is what makes the
+                treatment-vs-control effect sizes genuine.
+            progress_callback: Optional callable ``(day, days)`` invoked at the
+                start of each simulated day so callers can report live progress.
+        
+        Returns simulation result with trajectories, network evolution, events log, relationships
         """
         result = {
             "trajectories": {},
             "network_snapshots": [],
-            "events_log": []
+            "events_log": [],
+            "relationship_snapshots": []
         }
         
         for day in range(days):
+            if progress_callback is not None:
+                progress_callback(day, days)
             sim_date = (datetime.now() - timedelta(days=days-day)).strftime("%Y-%m-%d")
             
-            # 1. Simulate each student's day
+            # 1. Trigger scheduled events for this day
+            scheduled_events = self.event_engine.trigger_scheduled_events(day)
+            
+            # 2. Simulate each student's day
             for student_id in self.students:
+                student = self.students[student_id]
+                
+                # Generate random events for this student
+                random_events = self.event_engine.generate_random_events(student_id, day)
+                
+                # Apply all event impacts to student
+                self.event_engine.apply_events_to_student(student, day)
+                
+                # Simulate day timeline
                 timeline = self.simulate_day(student_id, sim_date, interventions)
                 
                 if student_id not in result["trajectories"]:
                     result["trajectories"][student_id] = []
                 result["trajectories"][student_id].append(timeline)
+                
+                # Log events
+                for event in random_events:
+                    self.event_logger.log_event(event, day, student)
+                
+                for event in scheduled_events:
+                    if event.student_id == "ALL":
+                        self.event_logger.log_event(event, day, student)
             
-            # 2. Update social network influence
+            # 3. Update social network influence
             influence_effects = self.network.propagate_influence(self.students, day)
             for student_id, influence in influence_effects.items():
                 if student_id in self.students:
                     current_ach = self.students[student_id].get("achievement_score", 50)
-                    self.students[student_id]["achievement_score"] = current_ach + influence
+                    self.students[student_id]["achievement_score"] = np.clip(
+                        current_ach + influence, 0, 100
+                    )
             
-            # 3. Update network edges (homophily strengthening)
-            self.network.update_edges(self.students)
+            # 3b. Apply interventions (real experimental manipulation). The
+            # delivery engine mutates achievement_score / motivation according
+            # to each intervention's channel efficacy and mediator quality.
+            if intervention_engine is not None:
+                for student_id in self.students:
+                    intervention_engine.apply_interventions_to_student(
+                        self.students[student_id], day,
+                        self.teachers, self.parents)
             
-            # 4. Trigger scheduled/random events
-            scheduled_events = []
-            for event_type in EventEngine.SCHEDULED_EVENTS:
-                if EventEngine.should_trigger_scheduled(day, event_type):
-                    scheduled_events.append(event_type)
+            # 3c. Record the post-update state into this day's timeline so the
+            # life-course curves reflect network + intervention dynamics.
+            for student_id in self.students:
+                timeline = result["trajectories"][student_id][day]
+                timeline.achievement_end = float(
+                    self.students[student_id].get("achievement_score", 50))
+                timeline.motivation_end = float(
+                    self.students[student_id].get("motivation", 0.5))
             
-            random_events = EventEngine.generate_random_events(day)
+            # 4. Update network edges (homophily strengthening)
+            network_stats = self.network.update_edges_homophily(self.students)
+            self.network_monitor.record_snapshot(day, self.network)
             
-            all_events = {"scheduled": scheduled_events, "random": random_events}
+            # 5. Update relationships
+            relationship_stats = self.relationship_updater.update_all(day)
+            
+            # 6. Record events
+            all_events = {
+                "scheduled": [e.event_type for e in scheduled_events],
+                "network_stats": network_stats,
+                "relationship_stats": relationship_stats
+            }
             result["events_log"].append({
                 "day": day,
                 "events": all_events
             })
+        
+        # Export final results
+        result["network_metrics"] = self.network_monitor.history
+        result["event_log"] = self.event_logger.export()
         
         return result

@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Node.js
+node_modules/
+frontend/dist/
+frontend/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project - runtime artifacts
+logs/*.log
+logs/*.txt
+logs/*.json
+logs/*.png
+start_out.txt
+
+# Project - generated/transient
+.workbuddy/
+.claude/
+.qoder/
+_confirm*
+data/runs/
+data/real/*.gz
+
+# Sensitive
+.env
+.env.local
+*.secret

@@ -1,0 +1,70 @@
+# Intervention Delivery Configuration (M4, §4.7)
+# Reference: 技术设计文档 附录 config/intervention_delivery.yaml
+
+delivery_models:
+  - direct
+  - teacher_mediated
+  - parent_mediated
+  - shadow_edu_mediated
+  - self_study_mediated
+
+target_scenes: [school, shadow_edu, home, self_study, all]
+
+teacher_fidelity_base: 0.8
+
+parent_style_multipliers:
+  autonomy_support: 0.2
+  content_explain: 0.05
+  control_monitor: -0.05
+  do_for_child: -0.1
+
+shadow_edu_dose_response:
+  lt_3h: 0.15
+  3_to_6h: 0.05
+  6_to_8h: -0.05
+  gt_8h: -0.15
+
+# ---------------------------------------------------------------------------
+# FR-S1：内置四个证据型学习干预对比（I1–I4），YAML 声明可扩展。
+# 新增干预只需在 interventions 下追加一个条目（提供 type / effect_* / target_scene
+# / default_channel），无需修改任何代码即可被 InterventionDeliveryEngine 加载。
+# effect_* 为引擎 0–100 成绩 / 0–1 动机刻度上的预期增益；
+# evidence_hedges_g 为学习科学元分析的近似效应量（仅用于报告与排序参考）。
+# ---------------------------------------------------------------------------
+interventions:
+  I1_worked_examples:
+    label: "样例学习"
+    type: worked_examples
+    description: "提供已解题样例供学生研习，降低认知负荷"
+    target_scene: [school, self_study]
+    default_channel: teacher_mediated
+    effect_achievement: 4.0
+    effect_motivation: 0.05
+    evidence_hedges_g: 0.35
+  I2_spaced_practice:
+    label: "间隔练习"
+    type: spaced_practice
+    description: "将复习分散到多个时间点，对抗遗忘曲线"
+    target_scene: [school, self_study, home]
+    default_channel: self_study_mediated
+    effect_achievement: 5.5
+    effect_motivation: 0.06
+    evidence_hedges_g: 0.50
+  I3_feedback:
+    label: "即时反馈"
+    type: feedback
+    description: "作答后即时给出针对性反馈与错误解释"
+    target_scene: [school, shadow_edu, self_study]
+    default_channel: teacher_mediated
+    effect_achievement: 6.0
+    effect_motivation: 0.10
+    evidence_hedges_g: 0.55
+  I4_retrieval_practice:
+    label: "检索练习"
+    type: retrieval_practice
+    description: "通过主动回忆/自测强化记忆提取路径"
+    target_scene: [school, self_study]
+    default_channel: self_study_mediated
+    effect_achievement: 5.8
+    effect_motivation: 0.07
+    evidence_hedges_g: 0.50
