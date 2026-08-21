@@ -1,7 +1,7 @@
 """
-VirtualStudent Sandbox v5.0 - Institution Generator
+VirtualStudent Sandbox v6.0 - Institution Generator
 
-Implements §5 M2 generate_institutions() (v5.0 新增) and the `institutions`
+Implements §5 M2 generate_institutions() (v6.0 baseline) and the `institutions`
 table (§6).
 
 Institution types: school / class / shadow_edu_provider.

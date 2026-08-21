@@ -34,6 +34,8 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from src.api.real_run import _INTERVENTION_ARMS
+
 BASE = "http://127.0.0.1:6668"
 
 # Track results
@@ -41,7 +43,7 @@ _results = {"passed": 0, "failed": 0, "errors": []}
 
 
 def check(condition: bool, test_id: str, description: str):
-    """Assert with tracking"""
+    """Assert with tracking -- raises so failures can never pass silently."""
     if condition:
         _results["passed"] += 1
         print(f"  [PASS] {test_id}: {description}")
@@ -49,6 +51,7 @@ def check(condition: bool, test_id: str, description: str):
         _results["failed"] += 1
         _results["errors"].append(f"{test_id}: {description}")
         print(f"  [FAIL] {test_id}: {description}")
+        raise AssertionError(f"{test_id}: {description}")
 
 
 def _create_run_wait(payload, timeout=240, poll=0.5):
@@ -108,10 +111,13 @@ def test_b1_full_lifecycle():
     check(r.status_code == 200, "B1.8", "Get life course")
     check(len(r.json()["achievement"]) == 60, "B1.9", "Life course has 60 data points")
     
-    # Scene comparison
+    # Scene comparison: expect exactly the scenes covered by the current
+    # treatment-arm table (YAML-declared; researcher runs may differ).
     r = requests.get(f"{BASE}/api/runs/{run_id}/scene_comparison")
     check(r.status_code == 200, "B1.10", "Scene comparison available")
-    check(len(r.json()["scenes"]) == 4, "B1.11", "4 scenes compared")
+    expected_scenes = {a[3] for a in _INTERVENTION_ARMS}
+    check(set(r.json()["scenes"].keys()) == expected_scenes,
+          "B1.11", f"{len(expected_scenes)} scenes compared")
     
     # Counterfactual
     r = requests.post(f"{BASE}/api/runs/{run_id}/counterfactual", json={
@@ -166,10 +172,25 @@ def test_b2_privacy_enforcement(run_id: str = None):
     check(not leaked, "B2.3", "Teacher: no S-level fields")
     
     # Check full response text for sensitive patterns
-    full_text = json.dumps(student)
+    full_text = json.dumps(students) + json.dumps(student) + json.dumps(teacher)
     from src.privacy import PrivacyGuard
     violations = PrivacyGuard.scan_log(full_text)
     check(len(violations) == 0, "B2.4", "Static scan: no S-level patterns in response")
+
+    # FR-A8: the D11 archive domain must never be served
+    check(all("D11" not in (s.get("domains") or {}) for s in students),
+          "B2.5", "Student list: D11 domain stripped")
+    check("D11" not in (student.get("domains") or {}),
+          "B2.6", "Single student: D11 domain stripped")
+
+    # No D11 field *content* anywhere in the response bodies
+    d11_markers = ["chronic_condition", "adhd_indicator", "anxiety_indicator",
+                   "depression_indicator", "medication_history",
+                   "family_income_detail", "self_harm_risk_flag",
+                   "psychological_counseling_history", "substance_exposure",
+                   "parent_health_issue", "economic_hardship_flag"]
+    check(not any(m in full_text for m in d11_markers),
+          "B2.7", "No D11 field content in any response body")
 
 
 def test_b3_cognitive_determinism():
@@ -540,7 +561,7 @@ def test_t7_network_endpoint_data():
 
 def main():
     print("=" * 70)
-    print("VirtualStudent Sandbox v5.0 - Full Verification Suite")
+    print("VirtualStudent Sandbox v6.0 - Full Verification Suite")
     print(f"Target: {BASE}")
     print("=" * 70)
     
@@ -563,27 +584,35 @@ def main():
     print("BUSINESS LOGIC TESTS")
     print("=" * 70)
     
-    run_id = test_b1_full_lifecycle()
-    test_b2_privacy_enforcement(run_id)
-    test_b3_cognitive_determinism()
-    test_b4_intervention_effect_direction()
-    test_b5_social_network_properties()
-    test_b6_event_half_life_decay()
-    test_b7_effect_size_correctness()
-    test_b8_persona_uniqueness()
+    def _run(test_fn, *args):
+        """Run one test; keep collecting results after an assertion failure."""
+        try:
+            return test_fn(*args)
+        except AssertionError as exc:
+            print(f"  [ABORTED] {test_fn.__name__}: {exc}")
+            return None
+
+    run_id = _run(test_b1_full_lifecycle)
+    _run(test_b2_privacy_enforcement, run_id)
+    _run(test_b3_cognitive_determinism)
+    _run(test_b4_intervention_effect_direction)
+    _run(test_b5_social_network_properties)
+    _run(test_b6_event_half_life_decay)
+    _run(test_b7_effect_size_correctness)
+    _run(test_b8_persona_uniqueness)
     
     # Technical tests
     print("\n" + "=" * 70)
     print("TECHNICAL TESTS")
     print("=" * 70)
     
-    test_t1_boundary_conditions()
-    test_t2_missing_resources()
-    test_t3_pagination()
-    test_t4_data_validation()
-    test_t5_privacy_guard_completeness()
-    test_t6_concurrent_requests()
-    test_t7_network_endpoint_data()
+    _run(test_t1_boundary_conditions)
+    _run(test_t2_missing_resources)
+    _run(test_t3_pagination)
+    _run(test_t4_data_validation)
+    _run(test_t5_privacy_guard_completeness)
+    _run(test_t6_concurrent_requests)
+    _run(test_t7_network_endpoint_data)
     
     # Summary
     print("\n" + "=" * 70)

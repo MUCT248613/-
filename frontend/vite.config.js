@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// VirtualStudent Sandbox v5.0 frontend
+// VirtualStudent Sandbox v6.0 frontend
 // Dev server on port 4000, proxies /api to FastAPI backend on port 6668
 export default defineConfig({
   plugins: [react()],

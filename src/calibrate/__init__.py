@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Calibration Module (M3)
+VirtualStudent Sandbox v6.0 - Calibration Module (M3)
 
 Implements §5 M3 校准 (Calibration).
 

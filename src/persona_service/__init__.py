@@ -1,5 +1,5 @@
 """
-Uniqueness Guarantee Engine (v5.0)
+Uniqueness Guarantee Engine (v6.0)
 - Fingerprinting: SHA256-based identity hash
 - Bloom filter: Scalable deduplication for 20M+ scale
 - Similarity detection: Approximate duplicate detection (LSH-like)

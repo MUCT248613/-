@@ -1,5 +1,5 @@
 """
-FastAPI Backend for VirtualStudent Sandbox v5.0
+FastAPI Backend for VirtualStudent Sandbox v6.0
 Implements all API endpoints defined in 技术设计文档 §9
 
 Endpoints:
@@ -32,6 +32,7 @@ import uuid
 import gzip
 import json
 import threading
+from collections import OrderedDict
 import numpy as np
 from scipy import stats as scipy_stats
 
@@ -39,6 +40,7 @@ from src.api.models import (
     RunCreateRequest, RunStatusResponse,
     RunSummaryResponse, RunListResponse,
     StudentProfileResponse, StudentListResponse, TeacherProfileResponse,
+    TeacherListResponse,
     DayTimelineResponse, TimelineEventResponse,
     NetworkSnapshotResponse, NetworkNodeResponse, NetworkEdgeResponse,
     NetworkEvolutionResponse,
@@ -52,7 +54,8 @@ from src.api.models import (
     PrescreeningResponse,
     HITLFeedbackRequest, HITLFeedbackResponse, HITLFeedbackListResponse,
     LLMConfigResponse, LLMConfigRequest,
-    MessageResponse
+    MessageResponse,
+    LLMSuggestRequest, LLMSuggestResponse,
 )
 from src.l_model.counterfactual import CounterfactualEngine, SimulationState
 from src.report import ReportWriter, HypothesisGenerator
@@ -64,7 +67,11 @@ from src.calibrate.literature_reference import (
     get_reference_summary as get_literature_summary,
 )
 from src.api.real_run import build_real_run
-from src.delivery.intervention_delivery import VirtualEffectSizeCalculator
+from src.delivery.intervention_delivery import (
+    VirtualEffectSizeCalculator, load_intervention_catalog,
+    load_counterfactual_catalog,
+)
+from src import __version__
 
 # Counterfactual engine singleton
 _cf_engine = CounterfactualEngine()
@@ -76,9 +83,9 @@ _hitl_feedback: dict = {}  # run_id -> [feedback records]
 # ============ App Setup ============
 
 app = FastAPI(
-    title="VirtualStudent Sandbox v5.0 API",
+    title=f"VirtualStudent Sandbox v{__version__} API",
     description="Education AI multi-agent simulation platform",
-    version="5.0"
+    version=__version__
 )
 
 # CORS for frontend (React dev server on port 4000)
@@ -96,11 +103,148 @@ app.add_middleware(
 # the history survives a backend restart. A run is ~48 MB raw (dominated by
 # per-day timelines) but compresses to a few MB.
 
-_runs: dict = {}  # run_id -> run state
+_runs: "_RunStore"  # run_id -> run state (lazy, disk-backed)
 _RUNS_DIR = Path("data/runs")
 
 # Skip persistence / loading under pytest so tests don't write or load runs.
 _UNDER_TEST = "pytest" in sys.modules
+
+
+class _RunStore:
+    """Lazy, disk-backed store for simulation runs.
+
+    Historical runs live in ``data/runs/{run_id}.json.gz`` and are only
+    decompressed when actually requested (small LRU cache), so startup and
+    the history list stay fast no matter how many runs accumulate.
+    Active/in-progress runs live in ``_mem`` and are never evicted.
+    """
+
+    MAX_CACHED = 4  # max fully-loaded historical runs kept in memory
+
+    def __init__(self) -> None:
+        self._mem: dict = {}
+        self._lru: "OrderedDict[str, dict]" = OrderedDict()
+
+    def __setitem__(self, run_id: str, run_data: dict) -> None:
+        self._mem[run_id] = run_data
+        self._lru.pop(run_id, None)
+
+    def __contains__(self, run_id: object) -> bool:
+        if run_id in self._mem or run_id in self._lru:
+            return True
+        if _UNDER_TEST:
+            return False
+        return (_RUNS_DIR / f"{run_id}.json.gz").exists()
+
+    def __getitem__(self, run_id: str) -> dict:
+        if run_id in self._mem:
+            return self._mem[run_id]
+        if run_id in self._lru:
+            self._lru.move_to_end(run_id)
+            return self._lru[run_id]
+        try:
+            with gzip.open(_RUNS_DIR / f"{run_id}.json.gz", "rt", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            raise KeyError(run_id)
+        self._lru[run_id] = data
+        while len(self._lru) > self.MAX_CACHED:
+            self._lru.popitem(last=False)
+        return data
+
+    def get(self, run_id: str, default=None):
+        try:
+            return self[run_id]
+        except KeyError:
+            return default
+
+    def mem_items(self):
+        """(run_id, run) pairs currently resident in memory."""
+        return list(self._mem.items())
+
+    def disk_ids(self):
+        """Run ids persisted on disk (cheap directory listing only)."""
+        if _UNDER_TEST or not _RUNS_DIR.exists():
+            return []
+        return [p.name[: -len(".json.gz")] for p in _RUNS_DIR.glob("*.json.gz")]
+
+
+_runs = _RunStore()
+
+# Reports are expensive (LLM narrative polish); cache per completed run so
+# reopening a run's dashboard/report page is instant.
+_report_cache: dict = {}
+
+
+def _run_summary_meta(run_id: str, run_data: dict) -> dict:
+    return {
+        "run_id": run_id,
+        "status": run_data.get("status", "completed"),
+        "n_students": len(run_data.get("students", {})),
+        "n_teachers": len(run_data.get("teachers", {})),
+        "n_parents": len(run_data.get("parents", {})),
+        "sim_days": run_data.get("sim_days", 0),
+        "created_at": run_data.get("created_at", ""),
+        "completed_at": run_data.get("completed_at"),
+    }
+
+
+def _write_run_meta(run_id: str, run_data: dict) -> None:
+    with open(_RUNS_DIR / f"{run_id}.meta.json", "w", encoding="utf-8") as f:
+        json.dump(_run_summary_meta(run_id, run_data), f, ensure_ascii=False)
+
+
+def _robustness_disk_path(run_id: str) -> Path:
+    return _RUNS_DIR / f"{run_id}.robustness.json"
+
+
+def _robustness_meta(run_id: str, run_data: dict) -> dict:
+    meta = _run_summary_meta(run_id, run_data)
+    config = run_data.get("config") or {}
+    meta["seed"] = config.get("seed", run_data.get("seed"))
+    meta["effect_sizes"] = run_data.get("effect_sizes") or []
+    return meta
+
+
+def _write_robustness_meta(run_id: str, run_data: dict) -> None:
+    _robustness_disk_path(run_id).write_text(
+        json.dumps(_robustness_meta(run_id, run_data), ensure_ascii=False),
+        encoding="utf-8")
+
+
+def _read_json_file(path: Path) -> Optional[dict]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _read_robustness_record(run_id: str, run_data: Optional[dict] = None) -> Optional[dict]:
+    """Read only the small robustness projection; never inflate the run gzip."""
+    if run_data is not None:
+        record = _robustness_meta(run_id, run_data)
+        return record if record["effect_sizes"] else None
+
+    record = _read_json_file(_robustness_disk_path(run_id))
+    if record and record.get("effect_sizes"):
+        return record
+
+    meta = _read_run_meta(run_id)
+    if not meta:
+        return None
+    report = _read_json_file(_RUNS_DIR / f"{run_id}.report.json")
+    effect_sizes = ((report or {}).get("report_card") or {}).get("effect_sizes") or []
+    if not effect_sizes:
+        return None
+    return {**meta, "seed": None, "effect_sizes": effect_sizes}
+
+
+def _read_run_meta(run_id: str) -> Optional[dict]:
+    try:
+        with open(_RUNS_DIR / f"{run_id}.meta.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def _persist_run(run_id: str, run_data: dict) -> None:
@@ -111,34 +255,215 @@ def _persist_run(run_id: str, run_data: dict) -> None:
         _RUNS_DIR.mkdir(parents=True, exist_ok=True)
         with gzip.open(_RUNS_DIR / f"{run_id}.json.gz", "wt", encoding="utf-8") as f:
             json.dump(run_data, f, ensure_ascii=False)
+        _write_run_meta(run_id, run_data)
+        _write_robustness_meta(run_id, run_data)
     except Exception as exc:  # persistence must never break run creation
         print(f"[warn] failed to persist run {run_id}: {exc}")
 
 
-def _load_persisted_runs() -> None:
-    """Load previously persisted runs from disk into the in-memory store."""
+def _backfill_run_meta() -> None:
+    """Write missing .meta.json sidecars for legacy runs in the background.
+
+    Replaces the old eager full-load at startup: the API stays responsive
+    while historical summaries are generated, and the history list fills
+    in progressively as sidecars appear.
+    """
     if _UNDER_TEST or not _RUNS_DIR.exists():
         return
     for path in sorted(_RUNS_DIR.glob("*.json.gz")):
         run_id = path.name[: -len(".json.gz")]
-        if run_id in _runs:
-            continue
-        try:
-            with gzip.open(path, "rt", encoding="utf-8") as f:
-                _runs[run_id] = json.load(f)
-        except Exception as exc:
-            print(f"[warn] failed to load persisted run {run_id}: {exc}")
+        if not (_RUNS_DIR / f"{run_id}.meta.json").exists():
+            try:
+                with gzip.open(path, "rt", encoding="utf-8") as f:
+                    _write_run_meta(run_id, json.load(f))
+            except Exception as exc:
+                print(f"[warn] failed to backfill meta for run {run_id}: {exc}")
 
 
-_load_persisted_runs()
 
 
 # ============ Health Check ============
 
 @app.get("/api/health", response_model=MessageResponse)
-async def health_check():
+def health_check():
     """Health check endpoint"""
-    return MessageResponse(message="VirtualStudent Sandbox v5.0 API is running", status="ok")
+    return MessageResponse(
+        message=f"VirtualStudent Sandbox v{__version__} API is running",
+        status="ok",
+    )
+
+
+
+# ============ LLM Parameter Suggestion ============
+
+def _extract_json_object(text: str) -> dict:
+    """Robustly parse a JSON object from an LLM reply.
+
+    Models may wrap JSON in markdown fences or prepend reasoning text
+    (e.g. qwen3 thinking blocks); plain ``json.loads`` would discard a
+    perfectly good answer in that case.
+    """
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        parts = cleaned.split("```")
+        cleaned = parts[1] if len(parts) > 1 else cleaned
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:]
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end > start:
+            return json.loads(cleaned[start:end + 1])
+        raise
+
+
+@app.post("/api/llm/suggest-params")
+def suggest_params(request: LLMSuggestRequest):
+    """Use LLM (or literature fallback) to suggest intervention parameters.
+
+    The researcher describes their intervention idea in natural language;
+    the system returns suggested dosage, exposure rate, evidence g, and cost
+    with literature backing. When the LLM is unavailable, a deterministic
+    literature-based fallback provides reasonable defaults.
+    """
+    from src.llm import get_client
+    from src.delivery.intervention_delivery import load_intervention_catalog
+    from src.calibrate.literature_reference import get_reference_summary
+
+    desc = request.description.strip()
+    if not desc:
+        raise HTTPException(status_code=400, detail="description is required")
+
+    client = get_client()
+    catalog = load_intervention_catalog()
+
+    # Build literature context for the prompt
+    lit_summary = get_reference_summary()
+    catalog_summary = []
+    for intv_id, spec in catalog.items():
+        catalog_summary.append(
+            f"- {spec.get('label', intv_id)}: effect_achievement={spec.get('effect_achievement', 0)}, "
+            f"evidence_g={spec.get('evidence_hedges_g', 0)}, cost={spec.get('cost_yuan', 0)}"
+        )
+
+    fallback_reason = None
+    if not client.is_live:
+        fallback_reason = ("未连接实时模型（未配置 API Key 或缺少 openai 依赖），"
+                           "使用离线文献参考模式；相同描述的建议是确定性的，因此每次一致")
+    if client.is_live:
+        system_prompt = (
+            "You are an educational research advisor for a virtual student simulation platform. "
+            "Given a researcher's intervention description, suggest realistic parameters. "
+            "Respond in JSON with these exact keys: "
+            "suggested_achievement_effect (float, 0-15), "
+            "suggested_motivation_effect (float, 0-0.3), "
+            "suggested_exposure_rate (float, 0.3-1.0), "
+            "suggested_evidence_g (float, 0-1.5), "
+            "suggested_cost_yuan (float, 0-500: the per-class monetary cost the "
+            "school must actually pay to implement this intervention in reality; "
+            "it MUST be 0 for events that require no school spending, e.g. "
+            "fictional external shocks or harmful incidents), "
+            "suggested_action (string, concrete actionable step in Chinese), "
+            "rationale (string, brief justification in Chinese), "
+            "literature_refs (list of strings, study names or citations), "
+            "confidence (string: high/medium/low)."
+        )
+        user_prompt = (
+            f"Intervention description: {desc}\n"
+            f"Target scene: {request.target_scene or 'school'}\n"
+            f"Target population: {request.target_population or 'middle school students'}\n\n"
+            f"Reference intervention catalog:\n" + "\n".join(catalog_summary) + "\n\n"
+            f"Literature BKT baseline: {lit_summary['aggregated']}\n"
+            f"Provide JSON suggestions."
+        )
+        raw = ""
+        try:
+            raw = client.call(
+                user_prompt,
+                temperature=0.2,
+                max_tokens=1000,
+                response_format={"type": "json_object"},
+                system_prompt=system_prompt,
+                strict=True,
+            )
+            import json
+            try:
+                data = _extract_json_object(raw)
+            except Exception:
+                # Model may have spent its budget on reasoning text; ask once
+                # more for pure JSON before giving up.
+                raw = client.call(
+                    user_prompt + "\n\n只输出 JSON 对象，不要输出任何其他文字。",
+                    temperature=0.2,
+                    max_tokens=1000,
+                    system_prompt=system_prompt,
+                    strict=True,
+                )
+                data = _extract_json_object(raw)
+            return LLMSuggestResponse(
+                suggested_achievement_effect=float(data.get("suggested_achievement_effect", 4.0)),
+                suggested_motivation_effect=float(data.get("suggested_motivation_effect", 0.05)),
+                suggested_exposure_rate=float(data.get("suggested_exposure_rate", 0.8)),
+                suggested_evidence_g=float(data.get("suggested_evidence_g", 0.3)),
+                suggested_cost_yuan=float(data.get("suggested_cost_yuan", 50)),
+                suggested_action=str(data.get("suggested_action", "")),
+                rationale=str(data.get("rationale", "")),
+                literature_refs=data.get("literature_refs", []),
+                source="llm",
+                confidence=str(data.get("confidence", "medium")),
+            )
+        except Exception as e:
+            snippet = " ".join((raw or "").split())[:120]
+            detail = f"{type(e).__name__}: {e}"
+            if snippet:
+                detail += f"；模型原始回复前120字: {snippet}"
+            fallback_reason = f"LLM 调用失败，已回退到文献参考（{detail}）"
+            print(f"[LLM suggest] fallback due to: {e} | raw: {snippet}")
+
+    # Literature-based fallback
+    # Match description keywords to catalog entries
+    best_match = None
+    best_score = 0
+    for intv_id, spec in catalog.items():
+        label = spec.get("label", "")
+        desc_text = spec.get("description", "")
+        action = spec.get("action", "")
+        score = sum(1 for ch in desc if ch in (label + desc_text + action))
+        if score > best_score:
+            best_score = score
+            best_match = spec
+
+    if best_match:
+        return LLMSuggestResponse(
+            suggested_achievement_effect=float(best_match.get("effect_achievement", 4.0)),
+            suggested_motivation_effect=float(best_match.get("effect_motivation", 0.05)),
+            suggested_exposure_rate=0.8,
+            suggested_evidence_g=float(best_match.get("evidence_hedges_g", 0.3)),
+            suggested_cost_yuan=float(best_match.get("cost_yuan", 50)),
+            suggested_action=str(best_match.get("action", "")),
+            rationale=f"Based on similar intervention: {best_match.get('label', '')}",
+            literature_refs=["Platform internal catalog"],
+            source="literature_fallback",
+            confidence="medium",
+            fallback_reason=fallback_reason,
+        )
+
+    # Generic fallback
+    return LLMSuggestResponse(
+        suggested_achievement_effect=4.0,
+        suggested_motivation_effect=0.05,
+        suggested_exposure_rate=0.8,
+        suggested_evidence_g=0.3,
+        suggested_cost_yuan=50.0,
+        suggested_action="",
+        rationale="No close match found; using conservative defaults based on typical educational intervention effect sizes.",
+        literature_refs=[s["study_id"] for s in lit_summary["studies"][:3]],
+        source="literature_fallback",
+        confidence="low",
+        fallback_reason=fallback_reason,
+    )
 
 
 # ============ LLM Configuration ============
@@ -154,8 +479,23 @@ _BAILIAN_MODELS = [
 ]
 
 
+@app.post("/api/llm/test")
+def test_llm_connection():
+    """Perform one real minimal LLM call to verify endpoint/key/model."""
+    from src.llm import get_client
+    return get_client().test_connection()
+
+
+@app.get("/api/llm/calls")
+def list_llm_calls():
+    """Recent LLM call records (live and offline-mock)."""
+    from src.llm import get_call_log
+    calls = get_call_log()
+    return {"total": len(calls), "calls": list(reversed(calls))}
+
+
 @app.get("/api/llm/config", response_model=LLMConfigResponse)
-async def get_llm_config():
+def get_llm_config():
     """Get current LLM configuration (API key masked)."""
     cfg = llm_get_config()
     return LLMConfigResponse(
@@ -169,7 +509,7 @@ async def get_llm_config():
 
 
 @app.post("/api/llm/config", response_model=LLMConfigResponse)
-async def update_llm_config(request: LLMConfigRequest):
+def update_llm_config(request: LLMConfigRequest):
     """Update LLM configuration at runtime (base_url / model / api_key).
     Omitted fields keep their current value. API key is never echoed back."""
     llm_reconfigure(
@@ -191,7 +531,7 @@ async def update_llm_config(request: LLMConfigRequest):
 # ============ Run Management ============
 
 @app.post("/api/runs", response_model=RunStatusResponse)
-async def create_run(request: RunCreateRequest):
+def create_run(request: RunCreateRequest):
     """Create a new simulation run.
 
     This drives the *real* scientific chain (4-layer persona generation ->
@@ -288,28 +628,53 @@ async def create_run(request: RunCreateRequest):
 
 
 @app.get("/api/runs", response_model=RunListResponse)
-async def list_runs():
+def list_runs():
     """List all simulation runs (newest first) so users can browse history
     instead of remembering run ids."""
     summaries = [
-        RunSummaryResponse(
-            run_id=run_id,
-            status=run.get("status", "completed"),
-            n_students=len(run.get("students", {})),
-            n_teachers=len(run.get("teachers", {})),
-            n_parents=len(run.get("parents", {})),
-            sim_days=run.get("sim_days", 0),
-            created_at=run.get("created_at", ""),
-            completed_at=run.get("completed_at"),
-        )
-        for run_id, run in _runs.items()
+        RunSummaryResponse(**_run_summary_meta(run_id, run))
+        for run_id, run in _runs.mem_items()
     ]
+    seen = {s.run_id for s in summaries}
+    for run_id in _runs.disk_ids():
+        if run_id in seen:
+            continue
+        meta = _read_run_meta(run_id)
+        if meta is not None:
+            summaries.append(RunSummaryResponse(**meta))
     summaries.sort(key=lambda r: r.created_at, reverse=True)
     return RunListResponse(total=len(summaries), runs=summaries)
 
 
+@app.get("/api/robustness")
+def get_robustness_summary():
+    """Return the small projection needed by the robustness page.
+
+    This endpoint deliberately reads sidecar/report JSON only. It does not
+    call ``get_run_report`` and does not inflate historical ``.json.gz`` runs,
+    so opening robustness analysis cannot compete with normal page requests.
+    """
+    records = []
+    seen = set()
+    for run_id, run_data in _runs.mem_items():
+        record = _read_robustness_record(run_id, run_data)
+        if record and record.get("status") == "completed":
+            records.append(record)
+        seen.add(run_id)
+
+    for run_id in _runs.disk_ids():
+        if run_id in seen:
+            continue
+        record = _read_robustness_record(run_id)
+        if record and record.get("status") == "completed":
+            records.append(record)
+
+    records.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return {"total": len(records), "runs": records}
+
+
 @app.get("/api/runs/{run_id}", response_model=RunStatusResponse)
-async def get_run_status(run_id: str):
+def get_run_status(run_id: str):
     """Get run status"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -325,14 +690,15 @@ async def get_run_status(run_id: str):
         current_day=run["sim_days"],
         created_at=run["created_at"],
         completed_at=run.get("completed_at"),
-        progress=run.get("progress")
+        progress=run.get("progress"),
+        intervention_meta=run.get("intervention_meta"),
     )
 
 
 # ============ Students ============
 
 @app.get("/api/runs/{run_id}/students", response_model=StudentListResponse)
-async def list_students(run_id: str, page: int = 1, page_size: int = 20):
+def list_students(run_id: str, page: int = 1, page_size: int = 20):
     """List students with pagination (P/R level only)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -355,7 +721,7 @@ async def list_students(run_id: str, page: int = 1, page_size: int = 20):
 
 
 @app.get("/api/runs/{run_id}/students/{student_id}", response_model=StudentProfileResponse)
-async def get_student_profile(run_id: str, student_id: str):
+def get_student_profile(run_id: str, student_id: str):
     """Get student profile (P/R level, PrivacyGuard filtered)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -372,8 +738,8 @@ async def get_student_profile(run_id: str, student_id: str):
 # ============ Timeline ============
 
 @app.get("/api/runs/{run_id}/students/{student_id}/timeline")
-async def get_student_timeline(run_id: str, student_id: str, date: Optional[str] = None,
-                               day: Optional[int] = None):
+def get_student_timeline(run_id: str, student_id: str, date: Optional[str] = None,
+                               day: Optional[int] = None, full: bool = False):
     """Get L-Model timeline events for a student.
 
     Serves the *real* per-day scene events recorded by the L-Model 2.0
@@ -388,6 +754,9 @@ async def get_student_timeline(run_id: str, student_id: str, date: Optional[str]
     day_timelines = _runs[run_id].get("day_timelines", {}).get(student_id, [])
     if not day_timelines:
         raise HTTPException(status_code=404, detail=f"No timeline for {student_id}")
+
+    if full:
+        return {"student_id": student_id, "days": day_timelines}
 
     # Select the requested day (by explicit index, by date, or default to last).
     timeline = None
@@ -415,7 +784,7 @@ async def get_student_timeline(run_id: str, student_id: str, date: Optional[str]
 # ============ Life Course ============
 
 @app.get("/api/runs/{run_id}/students/{student_id}/life_course")
-async def get_life_course(run_id: str, student_id: str,
+def get_life_course(run_id: str, student_id: str,
                           from_day: int = Query(0, alias="from"),
                           to_day: int = Query(90, alias="to")):
     """Get life course trajectory (state curves + event annotations)"""
@@ -446,8 +815,29 @@ async def get_life_course(run_id: str, student_id: str,
 
 # ============ Teachers ============
 
+@app.get("/api/runs/{run_id}/teachers", response_model=TeacherListResponse)
+def list_teachers(run_id: str, page: int = 1, page_size: int = 20):
+    """List teachers with pagination (P/R level)"""
+    if run_id not in _runs:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    teachers = list(_runs[run_id].get("teachers", {}).values())
+    total = len(teachers)
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_teachers = teachers[start:end]
+
+    filtered = [PrivacyGuard.filter_for_api(t) for t in page_teachers]
+    return TeacherListResponse(
+        total=total,
+        page=page,
+        page_size=page_size,
+        teachers=[TeacherProfileResponse(**t) for t in filtered]
+    )
+
+
 @app.get("/api/runs/{run_id}/teachers/{teacher_id}", response_model=TeacherProfileResponse)
-async def get_teacher_profile(run_id: str, teacher_id: str):
+def get_teacher_profile(run_id: str, teacher_id: str):
     """Get teacher profile (P/R level)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -463,7 +853,7 @@ async def get_teacher_profile(run_id: str, teacher_id: str):
 # ============ Scene Comparison ============
 
 @app.get("/api/runs/{run_id}/scene_comparison", response_model=SceneComparisonResponse)
-async def get_scene_comparison(run_id: str):
+def get_scene_comparison(run_id: str):
     """Get scene effect comparison.
 
     Serves the *real* per-scene effect sizes computed during the run by pooling
@@ -545,7 +935,7 @@ def _subgroup_label(student: dict, parent: dict, teacher: dict, dim: str):
 
 
 @app.get("/api/runs/{run_id}/subgroups", response_model=List[SubgroupSliceResponse])
-async def get_subgroups(run_id: str, dims: str = "ses,gender,personality"):
+def get_subgroups(run_id: str, dims: str = "ses,gender,personality"):
     """Get subgroup slicing analysis (FR-F10).
 
     Computes *genuine* heterogeneous effects: students are grouped by their real
@@ -608,7 +998,7 @@ async def get_subgroups(run_id: str, dims: str = "ses,gender,personality"):
 # ============ Network ============
 
 @app.get("/api/runs/{run_id}/network", response_model=NetworkSnapshotResponse)
-async def get_network_snapshot(run_id: str, date: Optional[str] = None, day: int = 0):
+def get_network_snapshot(run_id: str, date: Optional[str] = None, day: int = 0):
     """Get social network snapshot (nodes + edges, colored by achievement)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -633,7 +1023,7 @@ async def get_network_snapshot(run_id: str, date: Optional[str] = None, day: int
 
 
 @app.get("/api/runs/{run_id}/network/evolution", response_model=NetworkEvolutionResponse)
-async def get_network_evolution(run_id: str,
+def get_network_evolution(run_id: str,
                                 from_day: int = Query(0, alias="from"),
                                 to_day: int = Query(90, alias="to")):
     """Get network evolution sequence.
@@ -667,10 +1057,53 @@ async def get_network_evolution(run_id: str,
     )
 
 
+# ============ Triad Network (Student-Teacher-Parent) ============
+
+@app.get("/api/runs/{run_id}/triad_network")
+def get_triad_network(run_id: str, intervention_id: Optional[str] = None):
+    """Return the tri-partite student-teacher-parent relationship graph.
+
+    Optionally filter edges by intervention_id to show only the relationships
+    through which a specific intervention was delivered.
+    """
+    if run_id not in _runs:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    triad = _runs[run_id].get("triad_network")
+    if not triad:
+        raise HTTPException(status_code=404, detail="Triad network not available for this run")
+
+    result = {
+        "run_id": run_id,
+        "nodes": triad["nodes"],
+        "edges": triad["edges"],
+        "teacher_influence": triad.get("teacher_influence", {}),
+        "parent_trajectory": triad.get("parent_trajectory", {}),
+        "summary": {
+            "n_students": sum(1 for n in triad["nodes"] if n["type"] == "student"),
+            "n_teachers": sum(1 for n in triad["nodes"] if n["type"] == "teacher"),
+            "n_parents": sum(1 for n in triad["nodes"] if n["type"] == "parent"),
+            "n_edges": len(triad["edges"]),
+            "edge_types": {
+                "student-teacher": sum(1 for e in triad["edges"] if e["type"] == "student-teacher"),
+                "student-parent": sum(1 for e in triad["edges"] if e["type"] == "student-parent"),
+                "student-student": sum(1 for e in triad["edges"] if e["type"] == "student-student"),
+            },
+        },
+    }
+
+    if intervention_id:
+        affected = triad.get("intervention_edges", {}).get(intervention_id, [])
+        result["filtered_edges"] = affected
+        result["filter_intervention_id"] = intervention_id
+
+    return result
+
+
 # ============ Counterfactual ============
 
 @app.post("/api/runs/{run_id}/counterfactual", response_model=CounterfactualCreateResponse)
-async def create_counterfactual(run_id: str, request: CounterfactualCreateRequest):
+def create_counterfactual(run_id: str, request: CounterfactualCreateRequest):
     """Create counterfactual branch (same start, modified variable)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -691,6 +1124,7 @@ async def create_counterfactual(run_id: str, request: CounterfactualCreateReques
         modification=request.modification,
         days=request.days,
         seed=_runs[run_id].get("seed", 42),
+        custom_effects=request.custom_effects,
     )
     record["base_run_id"] = run_id
     
@@ -704,7 +1138,7 @@ async def create_counterfactual(run_id: str, request: CounterfactualCreateReques
 
 @app.get("/api/runs/{run_id}/counterfactual/{cf_id}/comparison",
          response_model=CounterfactualComparisonResponse)
-async def get_counterfactual_comparison(run_id: str, cf_id: str):
+def get_counterfactual_comparison(run_id: str, cf_id: str):
     """Get counterfactual trajectory comparison"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -721,15 +1155,21 @@ async def get_counterfactual_comparison(run_id: str, cf_id: str):
         effect_size_g=cmp.get("effect_size_g", 0.0),
         ci_95=cmp.get("ci_95", [0.0, 0.0]),
         trajectory_baseline=cmp.get("trajectory_baseline", []),
-        trajectory_modified=cmp.get("trajectory_modified", [])
+        trajectory_modified=cmp.get("trajectory_modified", []),
+        ancova_g=cmp.get("ancova_g"),
+        ancova_ci_95=cmp.get("ancova_ci_95"),
+        ancova_adjusted_diff=cmp.get("ancova_adjusted_diff"),
     )
 
 
 # ============ Report / Deliverable Center (M7 + M8) ============
 
-# Candidate intervention catalog: (id, scene, base_g, cost_yuan)
-# Covers teacher / parent / policy / lifestyle roles (FR-R6 multi-role hypotheses)
-_INTERVENTION_CATALOG = [
+# Candidate intervention catalog: (id, scene, base_g, cost_yuan).
+# Derived from config/intervention_delivery.yaml (FR-S1 single source of
+# truth); base_g is the meta-analytic evidence_hedges_g used only by the
+# legacy/demo fallback path. The built-in list covers teacher / parent /
+# policy / lifestyle roles (FR-R6) and is used when the YAML is unavailable.
+_FALLBACK_CATALOG = [
     ("cognitive_support", "school", 0.45, 60.0),
     ("autonomy_teaching", "school", 0.38, 80.0),
     ("parent_involvement", "home", 0.30, 40.0),
@@ -737,7 +1177,26 @@ _INTERVENTION_CATALOG = [
     ("sleep_schedule", "self_study", 0.18, 20.0),
 ]
 
-# Concrete, actionable teaching-improvement actions (Chinese) per intervention
+
+def _build_intervention_catalog():
+    rows = []
+    for intv_id, spec in load_intervention_catalog().items():
+        scenes = spec.get("target_scene") or ["school"]
+        if isinstance(scenes, (list, tuple)) and scenes:
+            scene = str(scenes[0])
+        else:
+            scene = str(scenes)
+        base_g = float(spec.get("evidence_hedges_g", 0.3))
+        cost = float(spec.get("cost_yuan", 50.0))
+        rows.append((intv_id, scene, base_g, cost))
+    return rows or list(_FALLBACK_CATALOG)
+
+
+_INTERVENTION_CATALOG = _build_intervention_catalog()
+
+# Concrete, actionable teaching-improvement actions (Chinese) per intervention.
+# Built-in entries act as fallbacks; YAML `action` fields override/extend them
+# so new YAML-declared interventions get actions without code changes.
 _INTERVENTION_ACTIONS = {
     "cognitive_support": "在课堂中嵌入即时认知支架（概念图 + 即时反馈），优先覆盖学校主场景",
     "autonomy_teaching": "将教师教学风格向自主支持型迁移（减少指令式灌输，增加选择权与归因引导）",
@@ -745,6 +1204,9 @@ _INTERVENTION_ACTIONS = {
     "shadow_edu_reduction": "削减低效课外班时长，把时间预算重新分配给自主睡眠与体育锻炼",
     "sleep_schedule": "规律化作息（固定就寝时间 + 睡前 1 小时无屏幕），降低疲劳累积",
 }
+for _intv_id, _spec in load_intervention_catalog().items():
+    if _spec.get("action"):
+        _INTERVENTION_ACTIONS[_intv_id] = str(_spec["action"])
 
 
 def _synthesize_evidence(run: dict) -> dict:
@@ -779,6 +1241,11 @@ def _synthesize_evidence(run: dict) -> dict:
             })
 
     _COST = {c[0]: c[3] for c in _INTERVENTION_CATALOG}
+    # Run-level metadata (researcher-defined or YAML arms) overrides the
+    # built-in catalog so costs/actions/labels follow the run's own arms.
+    run_meta = {m["id"]: m for m in run.get("intervention_meta") or []}
+    for _mid, _m in run_meta.items():
+        _COST[_mid] = float(_m.get("cost_yuan", _COST.get(_mid, 50.0)))
     candidates = []
     for es in effect_sizes:
         intv_id = es["intervention_id"]
@@ -805,10 +1272,21 @@ def _synthesize_evidence(run: dict) -> dict:
         virtual_curve = np.interp(np.linspace(0, 1, 60),
                                   np.linspace(0, 1, len(virtual_curve)),
                                   virtual_curve)
-        curve_spread = float(np.mean([np.std(c) for c in ach_curves]))
+        # Inter-student variance fidelity: per-day cross-sectional SD relative
+        # to the initial-day SD. A well-calibrated simulation preserves the
+        # cohort spread (ratio ~1.0); variance collapse/explosion gets flagged
+        # as distortion (the old '/15' reference was arbitrary and flagged
+        # essentially every run).
+        ach_mat = np.asarray(ach_curves, dtype=float)
+        cross_std = ach_mat.std(axis=0)
+        std0 = max(1e-6, float(cross_std[0]))
+        var_ratio_curve = np.clip(cross_std / std0, 0.0, None)
+        var_ratio_curve = np.interp(np.linspace(0, 1, 60),
+                                    np.linspace(0, 1, len(var_ratio_curve)),
+                                    var_ratio_curve)
     else:
         virtual_curve = np.linspace(0.3, 0.7, 60)
-        curve_spread = 15.0
+        var_ratio_curve = np.ones(60)
 
     sv = [s.get("simulation_vector", {}) for s in students.values()] or [{}]
     p_know = float(np.mean([v.get("p_know", 0.4) for v in sv] or [0.4]))
@@ -821,12 +1299,16 @@ def _synthesize_evidence(run: dict) -> dict:
         "learning_curve": virtual_curve,
         "error_dist": np.full(60, p_slip + p_guess) + rng.normal(0, 0.01, 60),
         "first_correct": np.full(60, 1.0 / max(0.05, p_know)) + rng.normal(0, 0.3, 60),
-        "variance_ratio": np.full(60, curve_spread / 15.0) + rng.normal(0, 0.05, 60),
+        "variance_ratio": var_ratio_curve + rng.normal(0, 0.01, 60),
     }
     # "real" side: plausible dynamics implied by the literature BKT baseline.
     ref = get_literature_bkt()
     real_curve = 1 - np.exp(-np.linspace(0, 1, 60) * ref["p_learn"] * 9)
     real_curve = 0.3 + 0.5 * real_curve
+    # Min-max normalize so the literature-implied curve is shape-comparable
+    # with the already-normalized virtual curve in the gap analysis.
+    _rc_span = max(1e-6, float(real_curve.max() - real_curve.min()))
+    real_curve = (real_curve - real_curve.min()) / _rc_span
     real = {
         "learning_curve": real_curve,
         "error_dist": np.full(60, ref["p_slip"] + ref["p_guess"]),
@@ -885,6 +1367,11 @@ def _synthesize_evidence(run: dict) -> dict:
         "seed": seed,
     }
 
+    actions = dict(_INTERVENTION_ACTIONS)
+    for _mid, _m in run_meta.items():
+        if _m.get("action"):
+            actions[_mid] = str(_m["action"])
+
     return {
         "run_summary": run_summary,
         "calibration": calibration,
@@ -892,12 +1379,14 @@ def _synthesize_evidence(run: dict) -> dict:
         "gap_records": gap_records,
         "ranked": ranked,
         "distortion_map": distortion_map,
+        "actions": actions,
     }
 
 
-def _build_recommendations(ranked, effect_sizes) -> list:
+def _build_recommendations(ranked, effect_sizes, actions=None) -> list:
     """Teaching-improvement recommendations, each carrying the three required
     elements (evidence + confidence + distortion warning)."""
+    act = actions if actions is not None else _INTERVENTION_ACTIONS
     es_by_id = {e["intervention_id"]: e for e in effect_sizes}
     recs = []
     for r in ranked[:5]:
@@ -920,7 +1409,7 @@ def _build_recommendations(ranked, effect_sizes) -> list:
         recs.append(RecommendationResponse(
             rank=r["rank"],
             intervention_id=intv,
-            action=_INTERVENTION_ACTIONS.get(intv, intv),
+            action=act.get(intv, intv),
             evidence=f"Hedges' g = {g:.3f}（95% CI [{ci[0]:.3f}, {ci[1]:.3f}]）",
             effect_size=round(g, 4),
             ci_95=[round(ci[0], 4), round(ci[1], 4)],
@@ -986,16 +1475,18 @@ def _render_full_markdown(report_card, research_plan, recommendations, run_id) -
     return "\n".join(lines)
 
 
-@app.get("/api/runs/{run_id}/report", response_model=ReportResponse)
-async def get_run_report(run_id: str):
-    """Centralized deliverable endpoint: M7 report card + M8 research plan +
-    teaching-improvement recommendations, with a full Markdown export."""
-    if run_id not in _runs:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+def _report_disk_path(run_id: str) -> Path:
+    return _RUNS_DIR / f"{run_id}.report.json"
 
-    run = _runs[run_id]
+
+def _dump_response(response) -> dict:
+    if hasattr(response, "model_dump"):
+        return response.model_dump()
+    return response.dict()
+
+
+def _build_run_report(run_id: str, run: dict) -> ReportResponse:
     ev = _synthesize_evidence(run)
-
     report_card = ReportWriter().build_report(
         ev["run_summary"], ev["calibration"], ev["effect_sizes"],
         ev["gap_records"], ev["ranked"],
@@ -1006,9 +1497,8 @@ async def get_run_report(run_id: str):
         ev["ranked"], ev["effect_sizes"], ev["gap_records"],
         n_students=ev["run_summary"]["n_students"] or 500,
     )
-    recommendations = _build_recommendations(ev["ranked"], ev["effect_sizes"])
+    recommendations = _build_recommendations(ev["ranked"], ev["effect_sizes"], ev.get("actions"))
     markdown = _render_full_markdown(report_card, research_plan, recommendations, run_id)
-
     return ReportResponse(
         run_id=run_id,
         generated_at=datetime.now().isoformat(),
@@ -1019,12 +1509,50 @@ async def get_run_report(run_id: str):
     )
 
 
+@app.get("/api/runs/{run_id}/report", response_model=ReportResponse)
+def get_run_report(run_id: str):
+    """Centralized deliverable endpoint: M7 report card + M8 research plan +
+    teaching-improvement recommendations, with a full Markdown export.
+
+    Sync (threadpool) endpoint: building a report makes blocking LLM calls,
+    which must never stall the async event loop. Results are cached in
+    memory and on disk so repeat opens are instant."""
+    if run_id not in _runs:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    run = _runs[run_id]
+    cached = _report_cache.get(run_id)
+    if cached is not None:
+        return cached
+    if not _UNDER_TEST:
+        disk = _report_disk_path(run_id)
+        try:
+            if disk.exists():
+                resp = ReportResponse(**json.loads(disk.read_text(encoding="utf-8")))
+                _report_cache[run_id] = resp
+                return resp
+        except Exception as exc:
+            print(f"[warn] failed to read report cache for {run_id}: {exc}")
+
+    response = _build_run_report(run_id, run)
+    if run.get("status", "completed") == "completed":
+        _report_cache[run_id] = response
+        if not _UNDER_TEST:
+            try:
+                _report_disk_path(run_id).write_text(
+                    json.dumps(_dump_response(response), ensure_ascii=False),
+                    encoding="utf-8")
+            except Exception as exc:
+                print(f"[warn] failed to write report cache for {run_id}: {exc}")
+    return response
+
+
 # ============ Entry Point ============
 
 # ============ Parents (FR-F7) ============
 
 @app.get("/api/runs/{run_id}/parents", response_model=ParentListResponse)
-async def list_parents(run_id: str, page: int = 1, page_size: int = 20):
+def list_parents(run_id: str, page: int = 1, page_size: int = 20):
     """List parents with pagination (P/R level only, FR-F7)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1045,7 +1573,7 @@ async def list_parents(run_id: str, page: int = 1, page_size: int = 20):
 
 
 @app.get("/api/runs/{run_id}/parents/{parent_id}", response_model=ParentProfileResponse)
-async def get_parent_profile(run_id: str, parent_id: str):
+def get_parent_profile(run_id: str, parent_id: str):
     """Get parent profile (P/R level, FR-F7)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1061,7 +1589,7 @@ async def get_parent_profile(run_id: str, parent_id: str):
 # ============ Calibration Diagnostics (FR-F2) ============
 
 @app.get("/api/runs/{run_id}/calibration", response_model=CalibrationDiagResponse)
-async def get_calibration_diagnostics(run_id: str):
+def get_calibration_diagnostics(run_id: str):
     """Calibration diagnostics: virtual-vs-reference BKT comparison (FR-F2).
 
     The virtual cohort's BKT parameters are the *actual* per-student values
@@ -1148,7 +1676,7 @@ async def get_calibration_diagnostics(run_id: str):
 # ============ Distortion Map (FR-F3) ============
 
 @app.get("/api/runs/{run_id}/distortion_map", response_model=DistortionMapResponse)
-async def get_distortion_map(run_id: str):
+def get_distortion_map(run_id: str):
     """Distortion heat-map: intervention × scene × metric (FR-F3)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1197,7 +1725,7 @@ async def get_distortion_map(run_id: str):
 # ============ Pre-screening Report (FR-F4) ============
 
 @app.get("/api/runs/{run_id}/prescreening", response_model=PrescreeningResponse)
-async def get_prescreening_report(run_id: str):
+def get_prescreening_report(run_id: str):
     """Pre-screening report: go/no-go decision support for real trials (FR-F4)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1209,8 +1737,8 @@ async def get_prescreening_report(run_id: str):
     es_by_id = {e["intervention_id"]: e for e in effect_sizes}
     
     criteria = [
-        "效应量 g ≥ 0.20（最低实践意义阈值）",
-        "95% CI 不跨越零（统计显著性）",
+        "效应量 |g| ≥ 0.20（最低实践意义阈值，双向：有益或有害）",
+        "95% CI 不跨越零（统计显著性，双向）",
         "未位于高失真区（模拟保真度保障）",
         "优先级得分 ≥ 0.40（综合可行性）",
     ]
@@ -1228,8 +1756,8 @@ async def get_prescreening_report(run_id: str):
         
         # Decision logic
         checks = {
-            "effect_threshold": g >= 0.20,
-            "ci_significance": ci_l > 0,
+            "effect_threshold": abs(g) >= 0.20,
+            "ci_significance": ci_l > 0 or ci_u < 0,
             "fidelity": not distorted,
             "feasibility": score >= 0.40,
         }
@@ -1250,6 +1778,7 @@ async def get_prescreening_report(run_id: str):
             "scene": es.get("scene", r.get("scene", "")),
             "hedges_g": round(g, 4),
             "ci_95": [round(ci_l, 4), round(ci_u, 4)],
+            "sample_size": int(es.get("sample_size", 0) or 0),
             "priority_score": round(score, 4),
             "in_distorted_region": distorted,
             "checks": checks,
@@ -1270,10 +1799,43 @@ async def get_prescreening_report(run_id: str):
     )
 
 
+# ============ Intervention / Counterfactual Catalog (FR-S1) ============
+
+@app.get("/api/catalog")
+def get_catalog():
+    """Serve the YAML-declared intervention & counterfactual catalogs.
+
+    Frontend and simulation share one vocabulary this way: adding an entry in
+    config/intervention_delivery.yaml surfaces it in the UI without code
+    changes (single source of truth).
+    """
+    interventions = []
+    for intv_id, spec in load_intervention_catalog().items():
+        scenes = spec.get("target_scene") or ["school"]
+        if isinstance(scenes, (list, tuple)) and scenes:
+            scene = str(scenes[0])
+        else:
+            scene = str(scenes)
+        interventions.append({
+            "id": intv_id,
+            "label": spec.get("label") or intv_id,
+            "type": spec.get("type") or intv_id,
+            "description": spec.get("description", ""),
+            "scene": scene,
+            "evidence_hedges_g": float(spec.get("evidence_hedges_g", 0.0)),
+            "cost_yuan": float(spec.get("cost_yuan", 0.0)),
+        })
+    counterfactuals = [
+        {"key": m.get("key"), "label": m.get("label") or m.get("key")}
+        for m in load_counterfactual_catalog() if m.get("key")
+    ]
+    return {"interventions": interventions, "counterfactuals": counterfactuals}
+
+
 # ============ Human-in-the-Loop (FR-F5) ============
 
 @app.post("/api/runs/{run_id}/hitl/feedback", response_model=HITLFeedbackResponse)
-async def submit_hitl_feedback(run_id: str, request: HITLFeedbackRequest):
+def submit_hitl_feedback(run_id: str, request: HITLFeedbackRequest):
     """Submit expert feedback (FR-F5 human-in-the-loop)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1295,7 +1857,7 @@ async def submit_hitl_feedback(run_id: str, request: HITLFeedbackRequest):
 
 
 @app.get("/api/runs/{run_id}/hitl/feedback", response_model=HITLFeedbackListResponse)
-async def list_hitl_feedback(run_id: str):
+def list_hitl_feedback(run_id: str):
     """List all expert feedback for a run (FR-F5)"""
     if run_id not in _runs:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1306,6 +1868,11 @@ async def list_hitl_feedback(run_id: str):
         total=len(feedbacks),
         feedbacks=[HITLFeedbackResponse(**f) for f in feedbacks],
     )
+
+threading.Thread(
+    target=_backfill_run_meta, daemon=True, name="run-meta-backfill"
+).start()
+
 
 if __name__ == "__main__":
     import uvicorn

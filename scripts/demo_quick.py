@@ -33,7 +33,7 @@ def main():
     """Quick demonstration"""
     
     print("\n" + "="*80)
-    print("虚拟学生试验台 v5.0 - 快速演示（验证所有模块）")
+    print("虚拟学生试验台 v6.0 - 快速演示（验证所有模块）")
     print("="*80 + "\n")
     
     # Config

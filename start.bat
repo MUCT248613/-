@@ -4,7 +4,7 @@ chcp 65001 >nul 2>&1
 title VirtualStudent Sandbox - Launcher
 
 rem ============================================================
-rem  VirtualStudent Sandbox v5.0 - one-click launcher
+rem  VirtualStudent Sandbox v6.0 - one-click launcher
 rem  Backend  : FastAPI / uvicorn  ->  http://localhost:6668
 rem  Frontend : Vite dev server    ->  http://localhost:4000
 rem
@@ -22,7 +22,7 @@ if not exist logs mkdir logs
 
 echo.
 echo ============================================================
-echo   VirtualStudent Sandbox v5.0
+echo   VirtualStudent Sandbox v6.0
 echo ============================================================
 echo.
 

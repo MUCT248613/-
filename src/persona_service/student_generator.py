@@ -8,6 +8,8 @@ from typing import Dict, List, Tuple, Optional, Callable
 from dataclasses import asdict
 import json
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 from . import UniquenessGuarantor
@@ -63,7 +65,7 @@ class StudentGenerator:
         self.uniqueness_guarantor = UniquenessGuarantor()
         # Cohort-level name registry. The identity fingerprint (L4) hashes
         # several fields, so two students can share a *name* yet pass the
-        # fingerprint check -- a visible violation of the v5.0 "every
+        # fingerprint check -- a visible violation of the v6.0 "every
         # individual is unique" promise (FR-A10). Tracking names here lets
         # generate_student() retry until each name is unique within a cohort.
         self._used_names = set()
@@ -94,7 +96,7 @@ class StudentGenerator:
     def _mock_llm(self, prompt: str, temperature: float = 0.9) -> str:
         """Mock LLM for testing (returns unique dummy JSON per prompt).
 
-        Diversity matters: the offline fallback must still honour the v5.0
+        Diversity matters: the offline fallback must still honour the v6.0
         uniqueness promise (FR-A10), so every field is derived from
         independent slices of the prompt hash rather than held constant (the
         old version returned the SAME family structure / personality / life
@@ -167,7 +169,7 @@ class StudentGenerator:
         The L2 retry loop asks the LLM to avoid already-used names, but a strong
         model can still converge on the same name for near-identical skeletons
         (the L1 prompt varies very little across students). This is the final,
-        LLM-independent guarantee behind the v5.0 uniqueness promise (FR-A10):
+        LLM-independent guarantee behind the v6.0 uniqueness promise (FR-A10):
         keep the surname and draw given-name characters from a pool, advancing a
         counter until the combination is unused. In offline mock mode collisions
         do not occur, so this is a no-op there and reproducibility is preserved.
@@ -495,21 +497,25 @@ class StudentGenerator:
 
         ``batch_callback`` (optional) is invoked as ``(done_batches, total)``
         after each batch so callers can report live progress."""
-        seeds: List[IdentitySeed] = []
+        seeds: List[IdentitySeed] = [None] * len(skeletons)  # type: ignore[list-item]
+        lock = threading.Lock()
+        state = {"done": 0}
         n = len(skeletons)
         total_batches = (n + batch_size - 1) // batch_size
-        done_batches = 0
-        for start in range(0, n, batch_size):
+        parallel = self._should_parallelize()
+
+        def _one(start: int) -> None:
             chunk = skeletons[start:start + batch_size]
             k = len(chunk)
             prompt = IdentitySeedGenerator.get_identity_seed_prompt(
                 chunk[0], batch_size=k)
-            if self._used_names:
-                used = "、".join(sorted(self._used_names))
-                prompt += (
-                    f"\n【姓名查重约束】以下姓名已被其他学生使用，本批生成的姓名"
-                    f"必须与它们完全不同：{used}"
-                )
+            with lock:
+                if self._used_names:
+                    used = "、".join(sorted(self._used_names))
+                    prompt += (
+                        f"\n【姓名查重约束】以下姓名已被其他学生使用，本批生成的姓名"
+                        f"必须与它们完全不同：{used}"
+                    )
             try:
                 raw = self.llm_func(prompt, temperature=1.0, max_tokens=3000)
                 parsed = IdentitySeedGenerator.parse_llm_output(raw)
@@ -518,16 +524,38 @@ class StudentGenerator:
                       f"({type(e).__name__}: {e}); using deterministic "
                       f"fallback for this batch", flush=True)
                 parsed = []
-            for j in range(k):
-                seed = (parsed[j] if (j < len(parsed)) and parsed[j].name
-                        else self._fallback_seed(chunk[j]))
-                seed.name = self._force_unique_name(seed.name)
-                self._used_names.add(seed.name)
-                seeds.append(seed)
-            done_batches += 1
-            if batch_callback is not None:
-                batch_callback(done_batches, total_batches)
+            with lock:
+                for j in range(k):
+                    seed = (parsed[j] if (j < len(parsed)) and parsed[j].name
+                            else self._fallback_seed(chunk[j]))
+                    seed.name = self._force_unique_name(seed.name)
+                    self._used_names.add(seed.name)
+                    seeds[start + j] = seed
+                state["done"] += 1
+                if batch_callback is not None:
+                    batch_callback(state["done"], total_batches)
+
+        self._run_batch_workers(list(range(0, n, batch_size)), _one, parallel)
         return seeds
+
+    def _should_parallelize(self) -> bool:
+        """Live LLM batches are network-bound (seconds per call), so run them
+        in a bounded thread pool. Offline/mock mode and test-injected LLMs
+        stay sequential (they are fast and order-sensitive)."""
+        if self._custom_llm:
+            return False
+        try:
+            return bool(get_client().is_live)
+        except Exception:
+            return False
+
+    def _run_batch_workers(self, starts: List[int], worker, parallel: bool) -> None:
+        if not parallel or len(starts) <= 1:
+            for s in starts:
+                worker(s)
+            return
+        with ThreadPoolExecutor(max_workers=16) as ex:
+            list(ex.map(worker, starts))
 
     def _fallback_seed(self, skeleton: Dict) -> IdentitySeed:
         """Deterministic offline-style identity seed used to top up a batch that
@@ -554,11 +582,14 @@ class StudentGenerator:
 
         ``batch_callback`` (optional) is invoked as ``(done_batches, total)``
         after each batch so callers can report live progress."""
-        narratives: List[Dict] = []
+        narratives: List[Dict] = [{}] * len(identity_seeds)
+        lock = threading.Lock()
+        state = {"done": 0}
         n = len(identity_seeds)
         total_batches = (n + batch_size - 1) // batch_size
-        done_batches = 0
-        for start in range(0, n, batch_size):
+        parallel = self._should_parallelize()
+
+        def _one(start: int) -> None:
             k = min(batch_size, n - start)
             prompt = self._narrative_batch_prompt(
                 identity_seeds, numerical, start, k)
@@ -574,13 +605,16 @@ class StudentGenerator:
                       f"({type(e).__name__}: {e}); using empty narratives "
                       f"for this batch", flush=True)
                 parsed = []
-            for j in range(k):
-                narratives.append(
-                    parsed[j] if (j < len(parsed) and isinstance(parsed[j], dict))
-                    else {})
-            done_batches += 1
-            if batch_callback is not None:
-                batch_callback(done_batches, total_batches)
+            with lock:
+                for j in range(k):
+                    narratives[start + j] = (
+                        parsed[j] if (j < len(parsed) and isinstance(parsed[j], dict))
+                        else {})
+                state["done"] += 1
+                if batch_callback is not None:
+                    batch_callback(state["done"], total_batches)
+
+        self._run_batch_workers(list(range(0, n, batch_size)), _one, parallel)
         return narratives
 
     @staticmethod

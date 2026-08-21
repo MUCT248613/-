@@ -1,12 +1,12 @@
 """
-End-to-end tests for the *real* scientific chain (v5.0).
+End-to-end tests for the *real* scientific chain (v6.0).
 
 These tests pin down the central guarantee of the platform: every number the
 API serves is produced by the genuine pipeline --
 
     4-layer persona generation
         -> L-Model 2.0 multi-agent simulation (network influence + events)
-        -> multi-arm intervention delivery (5 arms vs a no-treatment control)
+        -> multi-arm intervention delivery (YAML arms vs a no-treatment control)
         -> real Hedges' g effect sizes / trajectories / social network
 
 -- and NOT drawn from ``np.random``. They cover the orchestrator
@@ -69,10 +69,11 @@ def test_run_is_labelled_simulation(real_run):
     assert real_run["status"] == "completed"
 
 
-def test_all_five_arms_have_effect_sizes(real_run):
+def test_all_arms_have_effect_sizes(real_run):
     """One real effect size per treatment arm, each well-formed."""
     es = real_run["effect_sizes"]
-    assert len(es) == len(ARM_IDS) == 5
+    assert len(ARM_IDS) >= 4  # arms are YAML-declared (currently 5)
+    assert len(es) == len(ARM_IDS)
     by_id = {e["intervention_id"]: e for e in es}
     for arm in ARM_IDS:
         assert arm in by_id, f"missing effect size for arm {arm}"

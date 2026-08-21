@@ -109,6 +109,15 @@ const zh = {
     sleep_schedule: '作息规律化',
   },
 
+  // 干预投放通道（首页自定义候选）
+  channel: {
+    direct: '直接投放',
+    teacher_mediated: '教师中介',
+    parent_mediated: '家长中介',
+    shadow_edu_mediated: '课外班中介',
+    self_study_mediated: '自学中介',
+  },
+
   // 失真类别（差距分析 M5）
   distortion: {
     overestimate: '高估',
@@ -134,7 +143,7 @@ const zh = {
     failed: '失败',
   },
 
-  // 全方位档案（FR-A1，23 域 210+ 字段）字段名中文映射。
+  // 全方位档案（FR-A1，内部 23 域 210+ 字段，API 仅下发 P/R 级 22 域）字段名中文映射。
   // 数据层保持英文字段键不变，显示时经此表本地化，避免非技术用户看到英文键名。
   archiveField: {
     // D1 身份与学籍
@@ -186,7 +195,7 @@ const zh = {
     economic_stress: '经济压力', cultural_capital: '文化资本',
     home_learning_environment: '家庭学习环境', siblings_count: '兄弟姐妹数',
     birth_order: '出生顺序', intergenerational_education_gap: '代际教育差距',
-    // D11 隐私与敏感信息（虚拟合成数据，完整展示）
+    // D11 隐私与敏感信息（FR-A8：API 层已剥离，映射仅作历史/本地导出兼容保留）
     chronic_condition: '慢性疾病', adhd_indicator: '多动倾向指标',
     anxiety_indicator: '焦虑倾向指标', depression_indicator: '抑郁倾向指标',
     absenteeism_days_year: '年缺勤天数', medication_history: '用药史',
@@ -281,6 +290,16 @@ const zh = {
 
 // 语言包注册表。新增语言时在此添加，例如：en: { gender: { M: 'Male', ... } }
 const locales = { zh }
+
+/**
+ * 运行时注册/补充某个类目的本地化标签（例如后端 YAML 目录下发的干预名称）。
+ * 与该语言的现有类目合并，同名键以后注册者为准；类目不存在时自动创建。
+ */
+export function registerLabels(category, map) {
+  if (!category || !map || typeof map !== 'object') return
+  const localeDict = locales[CURRENT_LOCALE] || (locales[CURRENT_LOCALE] = {})
+  localeDict[category] = Object.assign({}, localeDict[category], map)
+}
 
 /**
  * 通用查询：返回 `category` 类目下 `value` 的本地化标签；

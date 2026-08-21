@@ -1,6 +1,6 @@
-# Base configuration for VirtualStudent Sandbox v5.0
+# Base configuration for VirtualStudent Sandbox v6.0
 system:
-  version: "5.0"
+  version: "6.0"
   environment: development
   log_level: INFO
 
@@ -19,7 +19,7 @@ cognitive:
   actr:
     decay_param: 0.5
 
-# Persona service (v5.0: LLM-deep)
+# Persona service (v6.0: LLM-deep)
 persona_service:
   student_count: 500
   teacher_count: 50
@@ -90,7 +90,7 @@ intervention_delivery:
     6_to_8h: -0.05
     gt_8h: -0.15
 
-# Privacy (v5.0: P/R/S enforcement)
+# Privacy (v6.0: P/R/S enforcement)
 privacy:
   levels:
     P: [identity, personality_tags, aptitudes, character_practice, interests]

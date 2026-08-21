@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Gap Analysis Module (M5)
+VirtualStudent Sandbox v6.0 - Gap Analysis Module (M5)
 
 Implements §5 M5 差距量化 (Gap Quantification).
 
@@ -84,9 +84,11 @@ class GapAnalyst:
         virt_mean = float(np.mean(virtual))
         
         if metric == "variance_ratio":
-            real_var = float(np.var(real))
-            virt_var = float(np.var(virtual))
-            magnitude = abs(real_var - virt_var) / max(real_var, 1e-6)
+            # virtual is a ratio series (cohort spread / reference spread),
+            # so a well-calibrated simulation has mean ~= 1. Compare on that
+            # scale (the old var-of-ratio comparison divided by ~1e-6 and
+            # flagged every run as distorted).
+            magnitude = abs(virt_mean - 1.0)
             category = ("variance_mismatch" if magnitude > self.tolerance else "none")
             return magnitude, category
         

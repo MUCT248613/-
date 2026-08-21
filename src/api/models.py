@@ -8,6 +8,31 @@ from pydantic import BaseModel, Field
 
 # ============ Run Management ============
 
+class CustomInterventionSpec(BaseModel):
+    """Researcher-defined candidate intervention (FR-S1 researcher entry).
+
+    Mirrors the YAML catalog schema so researcher hypotheses and built-in
+    evidence arms flow through the same delivery engine. When a run carries
+    one or more of these, they *are* the experiment: the built-in battery is
+    not appended (a no-treatment control arm is always kept).
+    """
+
+    id: Optional[str] = None
+    label: str
+    type: Optional[str] = None
+    description: str = ""
+    target_scene: List[str] = Field(default_factory=lambda: ["school"])
+    default_channel: str = "teacher_mediated"
+    effect_achievement: float = Field(default=4.0, ge=-20.0, le=20.0)
+    effect_motivation: float = Field(default=0.05, ge=-1.0, le=1.0)
+    # Fraction of arm students actually exposed (individual-level randomness).
+    # 1.0 = fully delivered; <1 dilutes the intent-to-treat effect honestly.
+    exposure_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    evidence_hedges_g: float = Field(default=0.3, ge=-1.0, le=2.0)
+    cost_yuan: float = Field(default=50.0, ge=0.0)
+    action: str = ""
+
+
 class RunCreateRequest(BaseModel):
     """Request to create a new simulation run"""
     n_students: int = Field(default=500, ge=1, le=5000)
@@ -15,7 +40,7 @@ class RunCreateRequest(BaseModel):
     n_parents: int = Field(default=500, ge=1, le=5000)
     sim_days: int = Field(default=90, ge=1, le=1095)
     seed: Optional[int] = Field(default=None)
-    interventions: Optional[List[Dict[str, Any]]] = None
+    interventions: Optional[List[CustomInterventionSpec]] = None
 
 
 class RunStatusResponse(BaseModel):
@@ -31,6 +56,9 @@ class RunStatusResponse(BaseModel):
     completed_at: Optional[str] = None
     # Live progress while status == "running": {percent, stage, message}.
     progress: Optional[Dict[str, Any]] = None
+    # Per-arm display/report metadata (researcher-defined or YAML arms) so the
+    # frontend can label custom candidates without a rebuild.
+    intervention_meta: Optional[List[Dict[str, Any]]] = None
 
 
 class RunSummaryResponse(BaseModel):
@@ -78,9 +106,20 @@ class TeacherProfileResponse(BaseModel):
     """Teacher profile (P/R level)"""
     teacher_id: str
     name: Optional[str] = None
+    subject: Optional[str] = None
     experience_years: Optional[int] = None
     teaching_style: Optional[str] = None
+    classroom_management: Optional[str] = None
+    teaching_philosophy: Optional[str] = None
     simulation_vector: Optional[Dict[str, Any]] = None
+
+
+class TeacherListResponse(BaseModel):
+    """Paginated teacher list"""
+    total: int
+    page: int
+    page_size: int
+    teachers: List[TeacherProfileResponse]
 
 
 class StudentListResponse(BaseModel):
@@ -180,7 +219,8 @@ class LifeCourseResponse(BaseModel):
 
 class CounterfactualCreateRequest(BaseModel):
     """Create counterfactual branch"""
-    modification: Dict[str, Any]  # What to change
+    modification: Dict[str, Any] = Field(default_factory=dict)
+    custom_effects: Optional[Dict[str, Any]] = None
     days: int = Field(default=30, ge=1, le=365)
     seed: Optional[int] = None
 
@@ -202,6 +242,9 @@ class CounterfactualComparisonResponse(BaseModel):
     ci_95: List[float]
     trajectory_baseline: List[float]
     trajectory_modified: List[float]
+    ancova_g: Optional[float] = None
+    ancova_ci_95: Optional[List[float]] = None
+    ancova_adjusted_diff: Optional[float] = None
 
 
 # ============ Report / Deliverable Center (M7 + M8) ============
@@ -346,6 +389,30 @@ class LLMConfigRequest(BaseModel):
     base_url: Optional[str] = None
     default_model: Optional[str] = None
     api_key: Optional[str] = None
+
+
+# ============ LLM Parameter Suggestion ============
+
+class LLMSuggestRequest(BaseModel):
+    """Request LLM-based parameter suggestions for a custom intervention."""
+    description: str
+    target_scene: Optional[str] = None
+    target_population: Optional[str] = None
+
+
+class LLMSuggestResponse(BaseModel):
+    """LLM-suggested intervention parameters with literature backing."""
+    suggested_achievement_effect: float
+    suggested_motivation_effect: float
+    suggested_exposure_rate: float
+    suggested_evidence_g: float
+    suggested_cost_yuan: float
+    suggested_action: str
+    rationale: str
+    literature_refs: List[str]
+    source: str  # "llm" | "literature_fallback"
+    confidence: str  # "high" | "medium" | "low"
+    fallback_reason: Optional[str] = None
 
 
 # ============ Generic ============

@@ -214,7 +214,7 @@ def main():
     """Main demonstration flow"""
     
     print("=" * 80)
-    print("虚拟学生试验台 v5.0 - 完整演示")
+    print("虚拟学生试验台 v6.0 - 完整演示")
     print("=" * 80)
     print()
     
@@ -296,7 +296,7 @@ def main():
     
     report = f"""
 {'='*80}
-虚拟学生试验台 v5.0 - 演示报告
+虚拟学生试验台 v6.0 - 演示报告
 {'='*80}
 
 【配置】

@@ -4,8 +4,8 @@ Tests for the FR-A1 full 23-domain archive (210+ fields).
 Verifies:
 - the archive covers all 23 domains (D1–D23) with 210+ fields total;
 - StudentGenerator embeds the full archive into each student;
-- PrivacyGuard is pass-through: the full archive (including the D11 domain)
-  is served unchanged, since every field is synthetic virtual data.
+- PrivacyGuard enforces FR-A8: the internal archive keeps all 23 domains,
+  but the API/prompt/export filters strip the S-level D11 domain.
 """
 import sys
 from pathlib import Path
@@ -60,23 +60,28 @@ def test_student_generator_embeds_full_archive():
     print(f"  [OK] Student archive: {student['field_count']} fields")
 
 
-def test_privacy_passthrough_serves_full_archive():
-    print("[TEST] PrivacyGuard serves the full archive unchanged (pass-through) ...")
+def test_privacy_enforcement_strips_sensitive_domain():
+    print("[TEST] PrivacyGuard strips the S-level D11 domain (FR-A8) ...")
     skeleton, seed, numerical = _sample_inputs()
     fa = build_full_archive(skeleton, seed, numerical, seed=3)
     persona = {"student_id": "X", "name": "X", "domains": fa["domains"],
                "field_count": fa["field_count"], "domain_count": fa["domain_count"]}
+    d11_field_count = len(fa["domains"]["D11"].get("fields", {}))
+
     filtered = PrivacyGuard.filter_for_api(persona)
-    # All data is synthetic (virtual students), so nothing is stripped: the D11
-    # domain and every field must be served and allowed to participate.
-    assert "D11" in filtered["domains"], "D11 must be served (synthetic data)"
-    assert filtered["domain_count"] == 23
-    assert filtered["field_count"] == fa["field_count"]
-    assert "sensitive_domains_hidden" not in filtered
-    # Prompt / export filters are likewise pass-through.
-    assert PrivacyGuard.filter_for_prompt(persona)["domain_count"] == 23
-    assert PrivacyGuard.filter_for_export({"domains": fa["domains"]})["domains"] == fa["domains"]
-    print(f"  [OK] Full archive served; fields={filtered['field_count']}")
+    assert "D11" not in filtered["domains"], "D11 must never reach the API"
+    assert filtered["domain_count"] == 22
+    assert filtered["field_count"] == fa["field_count"] - d11_field_count
+    assert filtered["sensitive_domains_hidden"] == ["D11"]
+
+    # Prompt and export paths enforce the same stripping.
+    assert "D11" not in PrivacyGuard.filter_for_prompt(persona)["domains"]
+    assert "D11" not in PrivacyGuard.filter_for_export({"domains": fa["domains"]})["domains"]
+
+    # Filtering must never mutate the internal archive object.
+    assert "D11" in persona["domains"]
+    assert persona["domain_count"] == 23
+    print(f"  [OK] D11 stripped; served fields={filtered['field_count']}")
 
 
 if __name__ == "__main__":
@@ -86,7 +91,7 @@ if __name__ == "__main__":
     test_archive_covers_23_domains_210_fields()
     test_archive_is_deterministic()
     test_student_generator_embeds_full_archive()
-    test_privacy_passthrough_serves_full_archive()
+    test_privacy_enforcement_strips_sensitive_domain()
     print("\n" + "=" * 70)
     print("[SUCCESS] All FR-A1 archive tests passed!")
     print("=" * 70)

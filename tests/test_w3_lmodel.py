@@ -94,7 +94,6 @@ def test_social_network():
     
     print(f"  [OK] Network: {n_students} nodes, {len(network.graph.edges())} edges")
     print(f"      Avg weight: {stats['avg_weight']:.3f}")
-    return True
 
 
 def test_event_engine():
@@ -129,7 +128,6 @@ def test_event_engine():
     assert "achievement_score" in students[0], "Student attribute not updated"
     
     print(f"  [OK] Events triggered: {len(engine.event_history)} total")
-    return True
 
 
 def test_relationships():
@@ -164,7 +162,6 @@ def test_relationships():
     
     print(f"  [OK] Relationship created and evolved: {rel.state.value}")
     print(f"      Intensity: {rel.intensity:.2f}, Duration: {rel.duration_days} days")
-    return True
 
 
 def test_lifetime_engine():
@@ -199,7 +196,6 @@ def test_lifetime_engine():
     
     print(f"  [OK] Simulation completed: {len(students)} students × 5 days")
     print(f"      Final avg achievement: {np.mean([s['achievement_score'] for s in engine.students.values()]):.1f}")
-    return True
 
 
 def test_full_workflow():
@@ -227,7 +223,6 @@ def test_full_workflow():
     print(f"      Final achievement: mean={mean_ach:.1f}, std={std_ach:.1f}")
     print(f"      Network density: {engine.network_monitor.history[-1]['density']:.3f}")
     print(f"      Total events logged: {len(result['event_log'])}")
-    return True
 
 
 if __name__ == "__main__":

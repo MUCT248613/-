@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Intervention Simulation Module (M4)
+VirtualStudent Sandbox v6.0 - Intervention Simulation Module (M4)
 
 Implements §5 M4 干预模拟 (Intervention Simulation), driven by L-Model 2.0.
 

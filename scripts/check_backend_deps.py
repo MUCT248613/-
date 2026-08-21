@@ -17,6 +17,8 @@ REQUIRED = [
     "networkx",
     "duckdb",
     "yaml",
+    "requests",
+    "openai",
 ]
 
 def main() -> int:

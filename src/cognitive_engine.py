@@ -5,6 +5,7 @@ BKT (Bayesian Knowledge Tracing) Cognitive Engine
 """
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
+import hashlib
 import numpy as np
 
 
@@ -65,10 +66,12 @@ class BayesianKnowledgeTracer:
                       p_correct_given_not_know * (1 - p_k))
         
         p_k_new = numerator / denominator if denominator > 0 else 0.5
-        
-        # Learning happens after correct response
-        if is_correct:
-            p_k_new = p_k_new + (1 - p_k_new) * state.p_learn
+
+        # Learning transition: applied at every opportunity regardless of the
+        # observed outcome (standard BKT, Corbett & Anderson 1994). An
+        # incorrect response lowers the observation posterior, but the learner
+        # may still have learned during the opportunity.
+        p_k_new = p_k_new + (1 - p_k_new) * state.p_learn
         
         return BKTState(
             p_know=p_k_new,
@@ -185,8 +188,11 @@ class CognitiveEngine:
         # Combine: P(correct) = P(know from BKT) * P(retrieve from ACT-R)
         p_correct_final = p_correct_bkt * p_retrieve
         
-        # Stochastic decision (seeded by profile hash for reproducibility)
-        random_seed = hash((tuple(sorted(learner_profile.items())), current_time)) % (2**31)
+        # Stochastic decision, seeded deterministically from the profile.
+        # Built-in hash() is salted per process for strings (PYTHONHASHSEED),
+        # so use a stable digest to keep runs reproducible across processes.
+        key = repr((tuple(sorted(learner_profile.items())), current_time))
+        random_seed = int(hashlib.md5(key.encode("utf-8")).hexdigest(), 16) % (2**31)
         np.random.seed(random_seed)
         is_correct = np.random.random() < p_correct_final
         

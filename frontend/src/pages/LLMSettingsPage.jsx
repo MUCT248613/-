@@ -10,6 +10,7 @@ const DEFAULT_BASE_URL = 'https://token-plan.cn-beijing.maas.aliyuncs.com/compat
 // DashScope model ids are case-sensitive and must be LOWERCASE. flash is the
 // default: fast and cheap, adequate for persona generation (no need for plus/max).
 const DEFAULT_MODEL = 'qwen3.7-flash'
+const PAYG_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 
 export default function LLMSettingsPage() {
   const navigate = useNavigate()
@@ -21,6 +22,9 @@ export default function LLMSettingsPage() {
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState(null)
   const [saved, setSaved] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null)
+  const [calls, setCalls] = useState([])
 
   useEffect(() => {
     let cancelled = false
@@ -38,6 +42,28 @@ export default function LLMSettingsPage() {
       cancelled = true
     }
   }, [])
+
+  const loadCalls = () => {
+    api.getLLMCalls().then((r) => setCalls(r.calls || [])).catch(() => {})
+  }
+
+  useEffect(() => {
+    loadCalls()
+  }, [])
+
+  const handleTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const r = await api.testLLM()
+      setTestResult(r)
+      loadCalls()
+    } catch (e) {
+      setTestResult({ status: 'error', reason: e.message })
+    } finally {
+      setTesting(false)
+    }
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -103,7 +129,52 @@ export default function LLMSettingsPage() {
         </div>
         <p className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
           未配置 API Key 时系统自动使用确定性离线模式，全部功能仍可运行（用于测试与演示）。
+          "已连接"仅表示配置就绪；点击"测试连接"会真实调用一次模型以验证端点 / Key / 模型名是否可用。
         </p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+          <button className="secondary" onClick={handleTest} disabled={testing}>
+            {testing ? '测试中…' : '测试连接（真实调用一次）'}
+          </button>
+          {testResult?.status === 'ok' && (
+            <span className="badge green">
+              调用成功 · {testResult.model} · {testResult.latency_ms}ms · 回复: {testResult.reply}
+            </span>
+          )}
+          {testResult?.status === 'offline' && <span className="badge">离线模式：{testResult.reason}</span>}
+          {testResult?.status === 'error' && (
+            <span className="badge" style={{ color: '#ef5b6b', borderColor: '#ef5b6b' }}>
+              调用失败：{testResult.reason}
+            </span>
+          )}
+        </div>
+        {testResult?.suggestion && (
+          <div className="privacy-note" style={{ marginTop: 8, color: '#f5a623', borderColor: '#f5a623', background: 'rgba(245,166,35,0.1)' }}>
+            {testResult.suggestion}
+          </div>
+        )}
+        {calls.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+              最近调用记录（{calls.length} 条，含离线 Mock）：
+            </div>
+            <table>
+              <thead>
+                <tr><th>时间</th><th>模型</th><th>类型</th><th>Tokens (入/出)</th><th>耗时</th></tr>
+              </thead>
+              <tbody>
+                {calls.slice(0, 10).map((c, i) => (
+                  <tr key={i}>
+                    <td>{new Date(c.timestamp_ms).toLocaleString()}</td>
+                    <td>{c.model}</td>
+                    <td>{c.live ? '实时调用' : '离线 Mock'}</td>
+                    <td>{c.prompt_tokens}/{c.completion_tokens}</td>
+                    <td>{c.latency_ms}ms</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -117,7 +188,17 @@ export default function LLMSettingsPage() {
             placeholder={DEFAULT_BASE_URL}
             style={{ width: '100%' }}
           />
-          <span className="muted" style={{ fontSize: 11 }}>阿里云百炼 Token Plan OpenAI 兼容端点（默认已填好，与按量计费地址不同）</span>
+          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+            <button className="secondary" style={{ fontSize: 11 }} onClick={() => setBaseUrl(DEFAULT_BASE_URL)}>
+              填入 Token Plan 端点
+            </button>
+            <button className="secondary" style={{ fontSize: 11 }} onClick={() => setBaseUrl(PAYG_BASE_URL)}>
+              填入按量计费端点
+            </button>
+          </div>
+          <span className="muted" style={{ fontSize: 11 }}>
+            Token Plan（套餐）端点只接受套餐绑定 Key；普通百炼 Key 请用按量计费端点。两者模型名相同。
+          </span>
         </div>
 
         <div className="field">

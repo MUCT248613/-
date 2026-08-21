@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Provenance Module
+VirtualStudent Sandbox v6.0 - Provenance Module
 
 Implements data 溯源 (provenance / lineage) tracking, backed by the
 `provenance` table (§6).

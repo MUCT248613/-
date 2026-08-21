@@ -49,12 +49,17 @@ class TestBayesianKnowledgeTracer:
         assert new_state.p_know < 1.0  # Not fully mastered
     
     def test_update_incorrect_response(self):
-        """Test state update after incorrect response"""
+        """Test state update after incorrect response (standard BKT)"""
         state = self.bkt.init_state()
         new_state = self.bkt.update(state, is_correct=False)
-        
-        # After incorrect: posterior decreases or stays low
-        assert new_state.p_know <= state.p_know
+
+        # The observation posterior drops sharply after an incorrect response
+        # (0.2 -> ~0.027 with these parameters); the standard learning
+        # transition then lifts it slightly, so the net state stays low and
+        # always below the correct-response update.
+        correct_state = self.bkt.update(state, is_correct=True)
+        assert new_state.p_know < correct_state.p_know
+        assert new_state.p_know < 0.5
     
     def test_learning_curve(self):
         """Test progression with multiple correct responses"""

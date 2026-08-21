@@ -5,7 +5,7 @@ student_count: 500
 teacher_count: 50            # 1 teacher per 10 students (class clustering)
 parent_per_student: [1, 2]   # 1-2 parents per student
 
-# Four-layer pipeline stages (v5.0)
+# Four-layer pipeline stages (v6.0)
 pipeline_stages:
   - sample_params        # L1: random skeleton (fidelity anchor)
   - identity_seed        # L2: LLM identity seed (uniqueness core)
@@ -17,14 +17,14 @@ coherence_max_retry: 5
 norms_dir: src/persona_service/norms/
 privacy_enforcement: strict  # PrivacyGuard enforced
 
-# LLM call mode (v5.0, §8.7)
+# LLM call mode (v6.0, §8.7)
 llm:
   model: qwen3.7-flash       # fast + cheap default; persona generation makes many calls
   batch_size: 8              # identity seeds per call (5-10 recommended)
   seed_temperature: 1.0      # seed layer: high diversity (0.9-1.1)
   narrative_temperature: 0.7 # narrative layer: consistency
 
-# Uniqueness guarantee (v5.0, §4.11)
+# Uniqueness guarantee (v6.0, §4.11)
 uniqueness:
   bloom_capacity: 20000000
   bloom_error_rate: 0.001

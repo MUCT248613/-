@@ -25,7 +25,6 @@ def test_student_generation():
     print(f"  [OK] Generated student: {student['name']}")
     print(f"       Achievement: {student['achievement_score']:.1f}")
     print(f"       Motivation: {student['simulation_vector']['motivation']:.2f}")
-    return True
 
 
 def test_teacher_generation():
@@ -40,7 +39,6 @@ def test_teacher_generation():
         assert 0.0 <= t["simulation_vector"]["fidelity"] <= 1.0
     
     print(f"  [OK] Generated {len(teachers)} teachers")
-    return True
 
 
 def test_parent_generation():
@@ -55,7 +53,6 @@ def test_parent_generation():
         assert "involvement_level" in p["simulation_vector"]
     
     print(f"  [OK] Generated {len(parents)} parents")
-    return True
 
 
 def test_uniqueness_guarantee():
@@ -78,7 +75,6 @@ def test_uniqueness_guarantee():
     assert len(unique_names) == len(student_names), "Duplicate names detected!"
     
     print(f"  [OK] All {len(students)} students are unique")
-    return True
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Priority Ranking Module (M6)
+VirtualStudent Sandbox v6.0 - Priority Ranking Module (M6)
 
 Implements §5 M6 预筛排序 (Pre-screening & Priority Ranking).
 

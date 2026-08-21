@@ -28,7 +28,7 @@ shadow_edu_dose_response:
 # FR-S1：内置四个证据型学习干预对比（I1–I4），YAML 声明可扩展。
 # 新增干预只需在 interventions 下追加一个条目（提供 type / effect_* / target_scene
 # / default_channel），无需修改任何代码即可被 InterventionDeliveryEngine 加载。
-# effect_* 为引擎 0–100 成绩 / 0–1 动机刻度上的预期增益；
+# effect_* 为完整干预期内、完美执行下的预期总增益（0–100 成绩 / 0–1 动机），引擎按天均摊；
 # evidence_hedges_g 为学习科学元分析的近似效应量（仅用于报告与排序参考）。
 # ---------------------------------------------------------------------------
 interventions:
@@ -38,33 +38,77 @@ interventions:
     description: "提供已解题样例供学生研习，降低认知负荷"
     target_scene: [school, self_study]
     default_channel: teacher_mediated
-    effect_achievement: 4.0
+    effect_achievement: 5.0
     effect_motivation: 0.05
     evidence_hedges_g: 0.35
+    cost_yuan: 60.0
+    action: "在课堂嵌入即时认知支架（概念图 + 工作样例），优先覆盖学校主场景" 
   I2_spaced_practice:
     label: "间隔练习"
     type: spaced_practice
     description: "将复习分散到多个时间点，对抗遗忘曲线"
     target_scene: [school, self_study, home]
     default_channel: self_study_mediated
-    effect_achievement: 5.5
+    effect_achievement: 7.0
     effect_motivation: 0.06
     evidence_hedges_g: 0.50
+    cost_yuan: 30.0
+    action: "将复习分散到多个时间点（间隔进度），利用自学场景对抗遗忘曲线" 
   I3_feedback:
     label: "即时反馈"
     type: feedback
     description: "作答后即时给出针对性反馈与错误解释"
     target_scene: [school, shadow_edu, self_study]
     default_channel: teacher_mediated
-    effect_achievement: 6.0
+    effect_achievement: 8.0
     effect_motivation: 0.10
     evidence_hedges_g: 0.55
+    cost_yuan: 80.0
+    action: "作答后即时给出针对性反馈与错误解释，由教师通道执行" 
   I4_retrieval_practice:
     label: "检索练习"
     type: retrieval_practice
     description: "通过主动回忆/自测强化记忆提取路径"
     target_scene: [school, self_study]
     default_channel: self_study_mediated
-    effect_achievement: 5.8
+    effect_achievement: 7.0
     effect_motivation: 0.07
     evidence_hedges_g: 0.50
+    cost_yuan: 30.0
+    action: "以主动回忆 / 自测替代被动重读（检索练习），强化记忆提取路径"
+  I5_sleep_hygiene:
+    label: "睡眠卫生"
+    type: sleep_hygiene
+    description: "前移就寝时间、保障睡眠时长，改善白天注意与工作记忆"
+    target_scene: [home, self_study]
+    default_channel: parent_mediated
+    effect_achievement: 3.0
+    effect_motivation: 0.04
+    evidence_hedges_g: 0.25
+    cost_yuan: 20.0
+    action: "与家长协作建立固定就寝例行（睡前 1 小时禁屏幕），聚焦白天注意改善" 
+
+# ---------------------------------------------------------------------------
+# 反事实“如果会怎样”环境变量（单变量分支）。
+# 前端反事实对比下拉框与后端 CounterfactualEngine 共读此节；
+# 追加条目即生效，无需改代码。
+# ---------------------------------------------------------------------------
+counterfactual_modifications:
+  - key: remove_shadow_edu
+    label: 移除课外班
+    effects: { shadow_hours_multiplier: 0.0 }
+  - key: increase_parental_support
+    label: 增加家长支持
+    effects: { parent_support_delta: 0.3 }
+  - key: forbid_romance
+    label: 禁止恋爱
+    effects: { romance_enabled: false }
+  - key: switch_class
+    label: 换班
+    effects: { class_switch: true }
+  - key: add_tutoring
+    label: 增加家教
+    effects: { tutoring_hours_delta: 3.0 }
+  - key: reduce_homework
+    label: 减少作业
+    effects: { homework_multiplier: 0.5 }

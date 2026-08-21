@@ -58,6 +58,7 @@ body {
 }
 
 .sidebar nav a {
+  display: block;
   color: var(--muted);
   text-decoration: none;
   padding: 8px 12px;
@@ -296,4 +297,37 @@ tr.clickable:hover {
   border-radius: 8px;
   padding: 8px 12px;
   margin-bottom: 12px;
+}
+
+.nav-section-title {
+  font-size: 10px;
+  color: #6b7a94;
+  font-weight: 700;
+  padding: 6px 12px 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Grouped sidebar navigation - force vertical layout */
+.sidebar nav > div {
+  display: flex !important;
+  flex-direction: column !important;
+  margin-bottom: 10px;
+}
+
+.sidebar nav > div > .nav-section-title {
+  font-size: 10px !important;
+  color: #6b7a94 !important;
+  font-weight: 700 !important;
+  padding: 6px 12px 2px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+  display: block !important;
+  width: 100% !important;
+}
+
+.sidebar nav > div > a {
+  display: block !important;
+  width: 100% !important;
+  margin: 0 !important;
 }

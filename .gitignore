@@ -44,3 +44,7 @@ data/real/*.gz
 .env
 .env.local
 *.secret
+
+# Local analysis runtime (Codex workspace-local Python)
+.tools/
+config/llm_config.json

@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Language Agents
+VirtualStudent Sandbox v6.0 - Language Agents
 
 Implements §3.1 agent roles:
   - LanguageAgent: generates student answer text / error explanations.
@@ -25,9 +25,9 @@ class PersonaView:
     """
     Structured persona injection for LLM prompts (§8.2).
 
-    A curated subset of fields is injected to keep the prompt compact; since
-    every field is synthetic there is no privacy filtering (PrivacyGuard is a
-    pass-through in the virtual-student system).
+    A curated subset of fields is injected to keep the prompt compact. The
+    persona is routed through PrivacyGuard.filter_for_prompt so S-level
+    content never enters LLM prompts (FR-A8).
     """
     
     # Fields injected into the prompt (kept compact for token budget)

@@ -6,12 +6,22 @@ import {
 import api from '../api.js'
 import { t, localName } from '../i18n.js'
 
-// Deterministic relationship type derived from edge weight (demo backend
-// only exposes weight; we map it to a type for coloring).
+// The backend social graph only exposes homophily edge *weights*
+// (friendship strength, 0-1). Label edges honestly by tie strength;
+// relationship types (romantic / conflict) belong to the relationship
+// state machine module and are not part of this graph.
 function edgeType(w) {
-  if (w > 0.66) return { label: '恋爱', color: '#ef5b6b' }
-  if (w > 0.4) return { label: '友谊', color: '#38c7a4' }
-  return { label: '冲突', color: '#f5a623' }
+  if (w > 0.66) return { label: '强联结', color: '#38c7a4' }
+  if (w > 0.4) return { label: '中联结', color: '#4f8cff' }
+  return { label: '弱联结', color: '#8fa0bd' }
+}
+
+function tierCounts(edges) {
+  const c = { strong: 0, mid: 0, weak: 0 }
+  for (const e of edges) {
+    c[e.weight > 0.66 ? 'strong' : e.weight > 0.4 ? 'mid' : 'weak']++
+  }
+  return c
 }
 
 // Achievement -> color (blue low -> green high)
@@ -23,8 +33,9 @@ function achColor(score) {
   return `rgb(${r},${g},${b})`
 }
 
-// Simple force-directed layout (repulsion + springs + centering)
-function layoutNetwork(nodes, edges, width, height, iterations = 250) {
+// Simple force-directed layout (repulsion + springs + centering), computed
+// in time-sliced chunks so the main thread never freezes on large graphs.
+function layoutNetworkChunked(nodes, edges, width, height, iterations, onDone, isCancelled) {
   const pos = {}
   const N = nodes.length
   // Seed positions on a circle for stability
@@ -42,8 +53,11 @@ function layoutNetwork(nodes, edges, width, height, iterations = 250) {
   const idx = {}
   nodes.forEach((n, i) => (idx[n.node_id] = i))
   const k = Math.sqrt((width * height) / Math.max(1, N)) * 0.6
+  let it = 0
 
-  for (let it = 0; it < iterations; it++) {
+  const runChunk = () => {
+    const end = Math.min(iterations, it + 25)
+    for (; it < end; it++) {
     const temp = 1 - it / iterations
     // Repulsion (O(n^2), fine for demo sizes)
     for (let i = 0; i < N; i++) {
@@ -93,8 +107,15 @@ function layoutNetwork(nodes, edges, width, height, iterations = 250) {
       p.vx = 0
       p.vy = 0
     }
+    }
+    if (isCancelled && isCancelled()) return
+    if (it < iterations) {
+      setTimeout(runChunk, 0)
+    } else {
+      onDone(pos)
+    }
   }
-  return pos
+  runChunk()
 }
 
 export default function NetworkPage() {
@@ -105,6 +126,7 @@ export default function NetworkPage() {
   const [selectedNode, setSelectedNode] = useState(null)
   const [nodeProfile, setNodeProfile] = useState(null)
   const [error, setError] = useState(null)
+  const [topK, setTopK] = useState(5)
 
   // ---- Pan / zoom / node-drag interaction (SVG-level, not browser zoom) ----
   const svgRef = useRef(null)
@@ -137,10 +159,55 @@ export default function NetworkPage() {
     }
   }, [id, dayIdx, days])
 
-  const positions = useMemo(() => {
-    if (!network) return {}
-    return layoutNetwork(network.nodes, network.edges, W, H)
-  }, [network])
+  // Display sparsification: keep only each student's top-K strongest ties.
+  // Dense legacy runs (everyone linked to everyone) stay readable this way.
+  const visibleEdges = useMemo(() => {
+    if (!network) return []
+    if (!topK) return network.edges
+    const perNode = {}
+    for (const e of network.edges) {
+      ;(perNode[e.source] || (perNode[e.source] = [])).push(e)
+      ;(perNode[e.target] || (perNode[e.target] = [])).push(e)
+    }
+    const keep = new Set()
+    for (const nid of Object.keys(perNode)) {
+      perNode[nid]
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, topK)
+        .forEach((e) => keep.add(e))
+    }
+    return network.edges.filter((e) => keep.has(e))
+  }, [network, topK])
+
+  const visTiers = useMemo(() => tierCounts(visibleEdges), [visibleEdges])
+  const allTiers = useMemo(() => (network ? tierCounts(network.edges) : null), [network])
+
+  const [positions, setPositions] = useState({})
+  const [layingOut, setLayingOut] = useState(false)
+  const layoutSeq = useRef(0)
+
+  useEffect(() => {
+    if (!network) {
+      setPositions({})
+      return undefined
+    }
+    const seq = ++layoutSeq.current
+    setLayingOut(true)
+    layoutNetworkChunked(
+      network.nodes, visibleEdges, W, H, 250,
+      (pos) => {
+        if (layoutSeq.current !== seq) return
+        setPositions(pos)
+        setLayingOut(false)
+      },
+      () => layoutSeq.current !== seq,
+    )
+    return () => {
+      layoutSeq.current += 1
+    }
+  }, [network, visibleEdges])
+
+  const layoutReady = Object.keys(positions).length > 0
 
   // Effective position of a node (drag override takes precedence over layout)
   const posOf = (nodeId) => nodeOverrides[nodeId] || positions[nodeId]
@@ -271,17 +338,28 @@ export default function NetworkPage() {
     <div>
       <div className="page-header">
         <h2>社会网络可视化</h2>
-        <p>力导向图 · 节点按学业成就着色 · 边按关系类型分色 · 时间轴回放演化</p>
+        <p>力导向图 · 节点按学业成就着色 · 边按联结强度分色 · 每人默认仅显示 Top-5 强关系 · 时间轴回放演化</p>
       </div>
 
       {error && <div className="error-box">{error}</div>}
 
       <div className="card">
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 8 }}>
-          <span className="badge" style={{ color: '#38c7a4', borderColor: '#38c7a4' }}>— 友谊</span>
-          <span className="badge" style={{ color: '#ef5b6b', borderColor: '#ef5b6b' }}>— 恋爱</span>
-          <span className="badge" style={{ color: '#f5a623', borderColor: '#f5a623' }}>— 冲突</span>
+          <span className="badge" style={{ color: '#38c7a4', borderColor: '#38c7a4' }}>
+            — 强联结 {visTiers.strong}{allTiers ? ` / 全部 ${allTiers.strong}` : ''}
+          </span>
+          <span className="badge" style={{ color: '#4f8cff', borderColor: '#4f8cff' }}>
+            — 中联结 {visTiers.mid}{allTiers ? ` / 全部 ${allTiers.mid}` : ''}
+          </span>
+          <span className="badge" style={{ color: '#8fa0bd', borderColor: '#8fa0bd' }}>
+            — 弱联结 {visTiers.weak}{allTiers ? ` / 全部 ${allTiers.weak}` : ''}
+          </span>
           <span className="muted" style={{ fontSize: 12 }}>节点颜色：蓝=低成就 → 绿=高成就</span>
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+          边 = 同伴友谊强度（同质性演化）；恋爱/冲突等关系类型由关系状态机模块跟踪，当前未接入本图。
+          Top-K 口径只保留每人最亲近的若干条边，显示颜色会偏向强联结；切换"显示全部边"可查看完整强度分布。
+          升级前生成的旧运行，其边权仍为旧逻辑产物（普遍偏强），重新运行后生效新分布。
         </div>
 
         {!network && !error && <div className="loading">加载中…</div>}
@@ -291,6 +369,12 @@ export default function NetworkPage() {
             <button type="button" onClick={() => zoomBy(1.3)}>放大 +</button>
             <button type="button" onClick={() => zoomBy(1 / 1.3)}>缩小 −</button>
             <button type="button" onClick={resetView}>重置视图</button>
+            <select value={topK} onChange={(e) => setTopK(Number(e.target.value))}>
+              <option value={3}>每人 Top-3 关系</option>
+              <option value={5}>每人 Top-5 关系</option>
+              <option value={8}>每人 Top-8 关系</option>
+              <option value={0}>显示全部边</option>
+            </select>
             <span className="muted" style={{ fontSize: 12 }}>
               缩放 {Math.round(view.k * 100)}% · 滚轮缩放 · 空白处拖动平移 · 拖动节点调整位置 · 点击节点查看画像
             </span>
@@ -306,16 +390,21 @@ export default function NetworkPage() {
             onMouseDown={startPan}
           >
             <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
-              {network.edges.map((e, i) => {
+              {!layoutReady && (
+                <text x={W / 2} y={H / 2} fill="#8fa0bd" textAnchor="middle">
+                  布局计算中…
+                </text>
+              )}
+              {layoutReady && visibleEdges.map((e, i) => {
                 const a = posOf(e.source)
                 const b = posOf(e.target)
                 if (!a || !b) return null
                 const et = edgeType(e.weight)
                 return (
-                  <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={et.color} strokeWidth={1 + e.weight * 2} opacity={0.45} />
+                  <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={et.color} strokeWidth={0.6 + e.weight * 2.2} opacity={0.25 + e.weight * 0.55} />
                 )
               })}
-              {network.nodes.map((n) => {
+              {layoutReady && network.nodes.map((n) => {
                 const p = posOf(n.node_id)
                 if (!p) return null
                 return (
@@ -340,7 +429,7 @@ export default function NetworkPage() {
 
         {network && (
           <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            第 {days[dayIdx] ?? 0} 天 · 节点 {network.nodes.length} · 边 {network.edges.length} ·
+            第 {days[dayIdx] ?? 0} 天 · 节点 {network.nodes.length} · 显示边 {visibleEdges.length} / 总边 {network.edges.length} ·
             密度 {network.density.toFixed(3)} · 平均聚类 {network.avg_clustering.toFixed(3)} ·
             连通分量 {network.n_components}
           </div>

@@ -4,7 +4,7 @@ chcp 65001 >nul 2>&1
 title VirtualStudent Sandbox - Stop
 
 rem ============================================================
-rem  VirtualStudent Sandbox v5.0 - stop both services
+rem  VirtualStudent Sandbox v6.0 - stop both services
 rem  Kills the backend supervisor (which auto-restarts uvicorn),
 rem  any uvicorn worker, and the frontend vite dev server.
 rem  Logic lives in scripts\kill_services.ps1.

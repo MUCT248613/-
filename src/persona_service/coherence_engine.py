@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Coherence Engine
+VirtualStudent Sandbox v6.0 - Coherence Engine
 
 Implements the persona 一致性引擎 (Coherence Engine) referenced in §5 M2
 (pipeline_stages includes validate_repair) and the archive design doc.

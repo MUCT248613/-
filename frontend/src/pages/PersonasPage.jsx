@@ -3,8 +3,8 @@ import { useParams } from 'react-router-dom'
 import api from '../api.js'
 import { t, localName, localGrade } from '../i18n.js'
 
-// Domain grouping for the profile card. All fields are synthetic (virtual
-// students), so the full archive -- including the D11 domain -- is shown.
+// Domain grouping for the profile card. The archive served by the API is
+// already PrivacyGuard-filtered: the S-level D11 domain is stripped (FR-A8).
 const DOMAIN_TABS = [
   { key: 'basic', label: '基本信息' },
   { key: 'academic', label: '学业' },
@@ -14,7 +14,8 @@ const DOMAIN_TABS = [
   { key: 'cognitive', label: '认知参数' },
   { key: 'family', label: '家庭' },
   { key: 'teacher', label: '教师' },
-  { key: 'full_archive', label: '全方位档案(23域)' },
+  { key: 'influence', label: '影响通路' },
+  { key: 'full_archive', label: '全方位档案(P/R级)' },
 ]
 
 function fmt(v) {
@@ -23,7 +24,40 @@ function fmt(v) {
   return String(v)
 }
 
-function DomainPanel({ student, domain, teacher }) {
+// 影响通路：教师/家长在模拟中如何影响该学生。通道效率公式与
+// src/delivery/intervention_delivery.py 保持一致：
+//   teacher_mediated = 0.7 * fidelity；parent_mediated = 0.5 * involvement_level。
+function InfluencePanel({ student, teacher, parent }) {
+  const tvec = (teacher && teacher.simulation_vector) || {}
+  const pvec = (parent && parent.simulation_vector) || {}
+  const tEff = tvec.fidelity != null ? 0.7 * tvec.fidelity : null
+  const pEff = pvec.involvement_level != null ? 0.5 * pvec.involvement_level : null
+  const bar = (v) => (
+    <span style={{ background: '#1b2740', borderRadius: 4, height: 8, width: 140, display: 'inline-block', verticalAlign: 'middle', marginLeft: 8 }}>
+      <span style={{ display: 'block', background: '#4f8cff', borderRadius: 4, height: 8, width: `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%` }} />
+    </span>
+  )
+  return (
+    <div>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+        模拟中教师与家长通过干预通道影响学生结果：教师通道预期执行效率 = 0.7 × 执行保真度；家长通道 = 0.5 × 参与水平。数值来自该学生的分配教师/主要家长画像。
+      </p>
+      <table>
+        <tbody>
+          <tr><td className="muted">教师通道（T-Model）</td><td>{teacher ? `${localName(teacher.name)} · ${t('teachingStyle', teacher.teaching_style)}` : '未分配教师'}</td></tr>
+          <tr><td className="muted">执行保真度 fidelity</td><td>{tvec.fidelity != null ? <>{fmt(tvec.fidelity)}{bar(tvec.fidelity)}</> : '—'}</td></tr>
+          <tr><td className="muted">教师通道预期效率</td><td>{tEff != null ? fmt(tEff) : '—'}</td></tr>
+          <tr><td className="muted">家长通道（P-Model）</td><td>{parent ? `${localName(parent.name)} · ${parent.involvement_style || '—'}` : '未分配家长'}</td></tr>
+          <tr><td className="muted">参与水平 involvement</td><td>{pvec.involvement_level != null ? <>{fmt(pvec.involvement_level)}{bar(pvec.involvement_level)}</> : '—'}</td></tr>
+          <tr><td className="muted">支持质量 support_quality</td><td>{pvec.support_quality != null ? fmt(pvec.support_quality) : '—'}</td></tr>
+          <tr><td className="muted">家长通道预期效率</td><td>{pEff != null ? fmt(pEff) : '—'}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function DomainPanel({ student, domain, teacher, parent }) {
   const sv = student.simulation_vector || {}
   switch (domain) {
     case 'basic':
@@ -110,6 +144,8 @@ function DomainPanel({ student, domain, teacher }) {
           </tbody>
         </table>
       )
+    case 'influence':
+      return <InfluencePanel student={student} teacher={teacher} parent={parent} />
     case 'full_archive':
       return <FullArchivePanel student={student} />
     default:
@@ -134,9 +170,9 @@ function fmtArchiveValue(v, key) {
   return String(v)
 }
 
-// FR-A1: 23-domain comprehensive archive display. All fields are synthetic
-// (virtual students), so every domain -- including D11 -- is shown. Field names
-// are localized to Chinese via i18n and values rendered in a readable format.
+// FR-A1: comprehensive archive display (23 domains internally; the API serves
+// 22 -- the S-level D11 domain is stripped by PrivacyGuard per FR-A8). Field
+// names are localized to Chinese via i18n and values rendered readably.
 function FullArchivePanel({ student }) {
   const domains = student.domains
   if (!domains || Object.keys(domains).length === 0) {
@@ -150,7 +186,7 @@ function FullArchivePanel({ student }) {
     <div>
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
         共 {student.domain_count || domainKeys.length} 域 · {student.field_count || '—'} 字段
-        （全部 23 域完整展示，含 D11 · 虚拟合成数据）
+        （S 级 D11 隐私域已由 PrivacyGuard 剥离 · FR-A8）
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
         {domainKeys.map((dk) => (
@@ -192,6 +228,7 @@ export default function PersonasPage() {
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState(null)
   const [teacher, setTeacher] = useState(null)
+  const [parent, setParent] = useState(null)
   const [domain, setDomain] = useState('basic')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -219,12 +256,21 @@ export default function PersonasPage() {
     setSelected(s)
     setDomain('basic')
     setTeacher(null)
+    setParent(null)
     if (s.assigned_teacher_id) {
       try {
         const t = await api.getTeacher(id, s.assigned_teacher_id)
         setTeacher(t)
       } catch {
         setTeacher(null)
+      }
+    }
+    if (s.primary_parent_id) {
+      try {
+        const pr = await api.getParent(id, s.primary_parent_id)
+        setParent(pr)
+      } catch {
+        setParent(null)
       }
     }
   }
@@ -245,7 +291,7 @@ export default function PersonasPage() {
     <div>
       <div className="page-header">
         <h2>画像浏览</h2>
-        <p>学生 / 教师档案卡 · 全部字段完整展示（虚拟合成数据，无真实隐私）</p>
+        <p>学生 / 教师档案卡 · 展示 P/R 级字段（S 级 D11 隐私域已剥离）· 虚拟合成数据</p>
       </div>
 
       {error && <div className="error-box">{error}</div>}
@@ -304,7 +350,7 @@ export default function PersonasPage() {
               </button>
             ))}
           </div>
-          <DomainPanel student={selected} domain={domain} teacher={teacher} />
+          <DomainPanel student={selected} domain={domain} teacher={teacher} parent={parent} />
         </div>
       )}
     </div>

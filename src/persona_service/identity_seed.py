@@ -1,6 +1,6 @@
 """
 Persona Service Core - Layer 2: LLM Identity Seed Generation
-这是 v5.0 的核心创新：让 LLM 创造性生成身份种子，而不是从词库采样
+这是 v6.0 的核心画像机制：让 LLM 创造性生成身份种子，而不是从词库采样
 
 Reference: 档案设计文档 §1.4.1
 """

@@ -434,12 +434,14 @@ def main(argv):
     if len(argv) == 3:
         convert(argv[1], argv[2])
         return
-    # default: the two design docs
+    # default: the three v6.0 deliverable documents
     pairs = [
-        (root / "需求说明文档-虚拟学生试验台-v5.0.md",
-         root / "需求说明文档-虚拟学生试验台-v5.0.docx"),
-        (root / "技术设计文档-虚拟学生试验台-v5.0.md",
-         root / "技术设计文档-虚拟学生试验台-v5.0.docx"),
+        (root / "需求说明文档-虚拟学生试验台-v6.0.md",
+         root / "需求说明文档-虚拟学生试验台-v6.0.docx"),
+        (root / "技术设计文档-虚拟学生试验台-v6.0.md",
+         root / "技术设计文档-虚拟学生试验台-v6.0.docx"),
+        (root / "虚拟学生全方位档案设计文档-v6.0.md",
+         root / "虚拟学生全方位档案设计文档-v6.0.docx"),
     ]
     for md, docx in pairs:
         convert(md, docx)

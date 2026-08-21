@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Literature Reference Baselines (M3)
+VirtualStudent Sandbox v6.0 - Literature Reference Baselines (M3)
 
 Reference BKT (Bayesian Knowledge Tracing) parameters aggregated from
 published educational data-mining literature. These serve as the

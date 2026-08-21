@@ -70,6 +70,30 @@ def load_intervention_catalog(
     return data.get("interventions", {}) or {}
 
 
+def load_counterfactual_catalog(config_path: Optional[str] = None) -> List[Dict]:
+    """Load YAML-declared counterfactual modifications (what-if knobs).
+
+    Returns a list of {key, label, effects} dicts. Missing file / yaml
+    degrades to an empty list (callers keep their built-in fallbacks).
+    """
+    try:
+        import yaml
+    except ImportError:
+        return []
+    if config_path is None:
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "config",
+            "intervention_delivery.yaml")
+    if not os.path.exists(config_path):
+        return []
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except Exception:
+        return []
+    return data.get("counterfactual_modifications", []) or []
+
+
 @dataclass
 class Intervention:
     """Single intervention instance"""
@@ -146,19 +170,19 @@ class InterventionDeliveryEngine:
         # (worked-examples g≈0.35, spaced g≈0.50, feedback g≈0.55, retrieval g≈0.50)
         # expressed on the engine's 0–100 achievement / 0–1 motivation scales.
         InterventionType.WORKED_EXAMPLES: {
-            "achievement": 4.0,
+            "achievement": 5.0,
             "motivation": 0.05
         },
         InterventionType.SPACED_PRACTICE: {
-            "achievement": 5.5,
+            "achievement": 7.0,
             "motivation": 0.06
         },
         InterventionType.FEEDBACK: {
-            "achievement": 6.0,
+            "achievement": 8.0,
             "motivation": 0.10
         },
         InterventionType.RETRIEVAL_PRACTICE: {
-            "achievement": 5.8,
+            "achievement": 7.0,
             "motivation": 0.07
         }
     }
@@ -205,7 +229,8 @@ class InterventionDeliveryEngine:
     
     def assign_intervention(self, student_id: str, intervention_type: Union[InterventionType, str],
                            channel: InterventionChannel, day_started: int,
-                           duration_days: int = 30, intensity: float = 0.8) -> str:
+                           duration_days: int = 30, intensity: float = 0.8,
+                           expected_effects: Optional[Dict] = None) -> str:
         """
         Assign an intervention to a student
         
@@ -223,8 +248,10 @@ class InterventionDeliveryEngine:
         type_str = _type_key(intervention_type)
         int_id = f"{student_id}_{type_str}_{channel.value}_{day_started}"
         
-        # Get base effect from type (built-in enum or YAML catalog)
-        type_effect = self._effect_for(intervention_type)
+        # Get base effect from type (built-in enum or YAML catalog), or the
+        # researcher-specified dose when provided (custom candidates).
+        type_effect = (expected_effects if expected_effects is not None
+                       else self._effect_for(intervention_type))
         
         intervention = Intervention(
             intervention_id=int_id,
@@ -269,15 +296,19 @@ class InterventionDeliveryEngine:
         if intervention.channel != InterventionChannel.DIRECT:
             channel_efficacy *= mediator_quality
         
-        # Compute effect with adherence
-        ach_delta = (intervention.expected_effect_on_achievement * 
-                    intervention.intensity * 
-                    channel_efficacy * 
+        # effect_* denotes the expected TOTAL gain over the whole treatment
+        # window at perfect delivery; spread evenly across the duration so
+        # the delivered dose is duration-independent and Hedges' g lands in
+        # the realistic 0.1-0.6 band instead of >1.
+        days = max(1, int(getattr(intervention, "duration_days", 1) or 1))
+        ach_delta = (intervention.expected_effect_on_achievement / days *
+                    intervention.intensity *
+                    channel_efficacy *
                     intervention.adherence_rate)
-        
-        mot_delta = (intervention.expected_effect_on_motivation * 
-                    intervention.intensity * 
-                    channel_efficacy * 
+
+        mot_delta = (intervention.expected_effect_on_motivation / days *
+                    intervention.intensity *
+                    channel_efficacy *
                     intervention.adherence_rate)
         
         return {
@@ -424,6 +455,88 @@ class VirtualEffectSizeCalculator:
         return float(hedges_g), float(ci_lower), float(ci_upper)
     
     @staticmethod
+    def compute_ancova_g(
+        control_pre: np.ndarray,
+        control_post: np.ndarray,
+        treatment_pre: np.ndarray,
+        treatment_post: np.ndarray,
+    ) -> tuple:
+        """Compute ANCOVA-adjusted Hedges' g effect size.
+
+        Uses baseline (pre-test) scores as a covariate to adjust post-test
+        comparison, reducing error variance and increasing statistical power.
+        This is the recommended estimator for RCTs with baseline measures
+        (Frison & Pocock, 1992; Van Breukelen, 2006).
+
+        Args:
+            control_pre: Baseline scores for control group
+            control_post: Post-test scores for control group
+            treatment_pre: Baseline scores for treatment group
+            treatment_post: Post-test scores for treatment group
+
+        Returns:
+            (ancova_g, ci_lower, ci_upper, adjusted_mean_diff)
+        """
+        n_c = len(control_pre)
+        n_t = len(treatment_pre)
+
+        if n_c < 3 or n_t < 3:
+            return 0.0, 0.0, 0.0, 0.0
+
+        # Combine data for regression
+        all_pre = np.concatenate([control_pre, treatment_pre])
+        all_post = np.concatenate([control_post, treatment_post])
+        group = np.array([0] * n_c + [1] * n_t, dtype=float)
+
+        # OLS: post = b0 + b1*group + b2*pre + error
+        # Using matrix form: y = X @ beta
+        X = np.column_stack([np.ones(len(all_pre)), group, all_pre])
+        try:
+            beta, residuals, rank, sv = np.linalg.lstsq(X, all_post, rcond=None)
+        except np.linalg.LinAlgError:
+            return 0.0, 0.0, 0.0, 0.0
+
+        b_group = beta[1]  # treatment effect (adjusted mean difference)
+
+        # Residual standard deviation
+        y_hat = X @ beta
+        resid = all_post - y_hat
+        df = len(all_post) - X.shape[1]
+        if df < 1:
+            return 0.0, 0.0, 0.0, float(b_group)
+        sd_resid = float(np.sqrt(np.sum(resid ** 2) / df))
+
+        if sd_resid == 0:
+            return 0.0, 0.0, 0.0, float(b_group)
+
+        # ANCOVA effect size: b_group / sd_resid (similar to Cohen's d)
+        cohens_d = b_group / sd_resid
+
+        # Hedges' g correction
+        J = 1 - (3 / (4 * (n_c + n_t - 2) - 1))
+        hedges_g = J * cohens_d
+
+        # Standard error using the ANCOVA variance formula
+        # SE = sqrt(1/n_c + 1/n_t) * (1 + pre-treatment imbalance correction)
+        pre_grand_mean = np.mean(all_pre)
+        pre_ss = np.sum((all_pre - pre_grand_mean) ** 2)
+        if pre_ss > 0:
+            # Correction for pre-test mean difference between groups
+            pre_diff = np.mean(treatment_pre) - np.mean(control_pre)
+            correction = 1.0 + (pre_diff ** 2) / pre_ss
+        else:
+            correction = 1.0
+
+        se_g = np.sqrt((1.0 / n_c + 1.0 / n_t) * correction) * J
+
+        # 95% CI
+        t_crit = scipy_stats.t.ppf(0.975, df)
+        ci_lower = hedges_g - t_crit * se_g
+        ci_upper = hedges_g + t_crit * se_g
+
+        return float(hedges_g), float(ci_lower), float(ci_upper), float(b_group)
+
+    @staticmethod
     def compute_nnt(effect_size: float, control_success_rate: float) -> float:
         """
         Number Needed to Treat (NNT)
@@ -467,24 +580,16 @@ class InterventionComparator:
     
     def compare_channels(self, intervention_results: Dict) -> Dict:
         """
-        Compare effect sizes across channels
-        
-        Args:
-            intervention_results: Dict with interventions assigned
-        
-        Returns:
-            Comparison table by channel
+        Compare effect sizes across channels.
+
+        NOT IMPLEMENTED: placeholder scaffold kept for the W4 extension plan.
+        Channel-level effect sizes are currently produced by
+        LModelSimulator.compute_scenario_comparison instead.
         """
-        comparison = {}
-        
-        for channel in InterventionChannel:
-            comparison[channel.value] = {
-                "n_students": 0,
-                "avg_effect_size": 0.0,
-                "avg_achievement_gain": 0.0
-            }
-        
-        return comparison
+        raise NotImplementedError(
+            "compare_channels is a reserved scaffold; use "
+            "LModelSimulator.compute_scenario_comparison for scene effects"
+        )
     
     def compute_scenario_comparison(self, scenario_name: str, 
                                    final_achievements: np.ndarray) -> Dict:

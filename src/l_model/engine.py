@@ -1,5 +1,5 @@
 """
-L-Model 2.0: Multi-Agent Life Timeline Engine (v5.0)
+L-Model 2.0: Multi-Agent Life Timeline Engine (v6.0)
 Continuous 7×24 simulation with social network, events, relationships
 
 Key features:
@@ -9,6 +9,7 @@ Key features:
 - Relationship state machine (romantic, peer, teacher, parent)
 - Continuous time with scene switching (5 scenes × ~288 min)
 - Life course trajectory recording
+- Cognitive modulation of daily learning gains (BKT mastery × fatigue)
 
 Reference: 技术设计文档 §4.6, 需求说明文档 §4.2
 """
@@ -21,6 +22,7 @@ import json
 from .social_network import SocialNetworkEngine, DynamicNetworkMonitor
 from .event_engine import EventEngine, EventLogger, Event
 from .relationship import RelationshipStateMachine, RelationshipType, RelationshipUpdateEngine
+from ..cognitive_engine import BayesianKnowledgeTracer, BKTState
 
 
 @dataclass
@@ -71,7 +73,8 @@ class LifeTimeEngineV2:
         # ids so influence propagation actually reaches the cohort (the old
         # hard-coded S{i:04d} naming silently mismatched 5-digit ids).
         self.network = social_network or SocialNetworkEngine(
-            node_ids=list(self.students.keys()), seed=seed)
+            node_ids=list(self.students.keys()), seed=seed,
+            profiles=self.students)
         self.event_engine = EventEngine(seed=seed)
         self.event_logger = EventLogger()
         self.network_monitor = DynamicNetworkMonitor()
@@ -79,7 +82,21 @@ class LifeTimeEngineV2:
         # Relationship management
         self.relationship_manager = RelationshipStateMachine()
         self.relationship_updater = RelationshipUpdateEngine(self.relationship_manager)
-        
+
+        # Cognitive engine (BKT): per-student mastery states modulate daily
+        # learning efficiency, so trajectories respond to each persona's
+        # simulation_vector instead of being profile-independent noise.
+        self.bkt = BayesianKnowledgeTracer()
+        self.bkt_states: Dict[str, BKTState] = {}
+        for s in students:
+            sv = s.get("simulation_vector") or {}
+            self.bkt_states[s["student_id"]] = BKTState(
+                p_know=float(sv.get("p_know", 0.2)),
+                p_learn=float(sv.get("p_learn", 0.25)),
+                p_slip=float(sv.get("p_slip", 0.1)),
+                p_guess=float(sv.get("p_guess", 0.1)),
+            )
+
         # Results
         self.timelines = []  # Accumulated timelines
     
@@ -151,12 +168,28 @@ class LifeTimeEngineV2:
             )
             events.append(event)
         
+        # Cognitive modulation: BKT mastery raises learning efficiency,
+        # fatigue lowers it (gains stay proportional to the persona).
+        state = self.bkt_states.get(student_id)
+        if state is not None:
+            mastery_factor = 0.6 + 0.8 * state.p_know  # 0.6 .. 1.4
+            fatigue_factor = max(0.4, 1.0 - student.get("fatigue", 50) / 250.0)
+            cognitive_factor = mastery_factor * fatigue_factor
+            for e in events:
+                e.learning_gain *= cognitive_factor
+
         # Compute daily aggregates
         total_learning_gain = sum(e.learning_gain for e in events)
         total_fatigue_change = sum(e.fatigue_change for e in events)
         
         student["fatigue"] = min(100, max(0, student.get("fatigue", 50) + total_fatigue_change))
-        
+
+        # Daily BKT update: one simulated practice opportunity per day keeps
+        # the mastery state evolving together with the trajectory.
+        if state is not None:
+            practiced_correct = np.random.random() < self.bkt.predict(state)
+            self.bkt_states[student_id] = self.bkt.update(state, practiced_correct)
+
         return DayTimeline(
             student_id=student_id,
             sim_date=sim_date,

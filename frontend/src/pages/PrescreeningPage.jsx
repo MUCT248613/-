@@ -10,10 +10,23 @@ const DECISION_STYLES = {
 }
 
 const CHECK_LABELS = {
-  effect_threshold: '效应量 ≥ 0.20',
-  ci_significance: '95% CI 不跨零',
+  effect_threshold: '效应量 |g| &gt;= 0.20',
+  ci_significance: '95% CI 不跨零（双向）',
   fidelity: '非高失真区',
-  feasibility: '优先级 ≥ 0.40',
+  feasibility: '优先级 &gt;= 0.40',
+}
+
+function getExclusionReasons(c) {
+  const reasons = []
+  if (!c.checks?.effect_threshold) {
+    reasons.push('效应量不足 (|g|=' + Math.abs(c.hedges_g || 0).toFixed(2) + ' < 0.20)')
+  }
+  if (!c.checks?.ci_significance) reasons.push('CI 跨零')
+  if (!c.checks?.fidelity) reasons.push('高失真区')
+  if (!c.checks?.feasibility) {
+    reasons.push('优先级不足 (' + (c.priority_score || 0).toFixed(2) + ' < 0.40)')
+  }
+  return reasons
 }
 
 export default function PrescreeningPage() {
@@ -62,6 +75,18 @@ export default function PrescreeningPage() {
         </div>
       </div>
 
+      {(() => {
+        const ns = (data.candidates || []).map((c) => c.sample_size).filter((n) => n > 0)
+        const minN = ns.length ? Math.min(...ns) : null
+        if (minN === null || minN >= 30) return null
+        return (
+          <div className="error-box" style={{ marginBottom: 12 }}>
+            警告：本次运行最小分析样本量仅 {minN}（单臂人数过少）。效应量与置信区间估计极不稳定，
+            判定仅供参考；请增大学生数（建议 &gt;= 300）后重新运行再作结论。
+          </div>
+        )
+      })()}
+
       <div className="card">
         <h3>判定标准</h3>
         <ul style={{ lineHeight: 2, paddingLeft: 20 }}>
@@ -76,13 +101,22 @@ export default function PrescreeningPage() {
         <table>
           <thead>
             <tr>
-              <th>排名</th><th>干预</th><th>场景</th><th>Hedges' g</th><th>95% CI</th>
-              <th>优先级</th><th>失真区</th><th>判定</th>
+              <th>排名</th>
+              <th>干预</th>
+              <th>场景</th>
+              <th>Hedges g</th>
+              <th>95% CI</th>
+              <th>优先级</th>
+              <th>样本量</th>
+              <th>失真区</th>
+              <th>判定</th>
+              <th>排除原因</th>
             </tr>
           </thead>
           <tbody>
             {(data.candidates || []).map((c) => {
               const ds = DECISION_STYLES[c.decision] || DECISION_STYLES.no_go
+              const reasons = getExclusionReasons(c)
               return (
                 <tr key={c.intervention_id}>
                   <td><strong>{c.rank}</strong></td>
@@ -91,6 +125,7 @@ export default function PrescreeningPage() {
                   <td><strong>{c.hedges_g?.toFixed(3)}</strong></td>
                   <td className="muted">[{c.ci_95?.[0]?.toFixed(3)}, {c.ci_95?.[1]?.toFixed(3)}]</td>
                   <td className="muted">{c.priority_score?.toFixed(3)}</td>
+                  <td className="muted">{c.sample_size ?? '—'}</td>
                   <td>
                     {c.in_distorted_region
                       ? <span className="badge" style={{ color: '#f5a623', borderColor: '#f5a623' }}>失真</span>
@@ -101,6 +136,11 @@ export default function PrescreeningPage() {
                       {c.decision.toUpperCase()}
                     </span>
                   </td>
+                  <td style={{ fontSize: 12 }}>
+                    {c.decision === 'no_go'
+                      ? <span style={{ color: '#ef5b6b' }}>{reasons.join('；') || '未通过某些标准'}</span>
+                      : <span className="muted">—</span>}
+                  </td>
                 </tr>
               )
             })}
@@ -109,7 +149,7 @@ export default function PrescreeningPage() {
       </div>
 
       {(data.candidates || []).map((c) => (
-        <div className="card" key={`detail-${c.intervention_id}`}>
+        <div className="card" key={'detail-' + c.intervention_id}>
           <h3>
             {c.rank}. {t('intervention', c.intervention_id)}
             <span

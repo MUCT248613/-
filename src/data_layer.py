@@ -57,7 +57,7 @@ class DataLayer:
         """)
     
     def _create_persona_tables(self):
-        """Virtual persona storage (v5.0: LLM-deep-participatory)"""
+        """Virtual persona storage (v6.0: LLM-deep-participatory)"""
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS students (
                 student_id VARCHAR PRIMARY KEY,

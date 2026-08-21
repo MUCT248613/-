@@ -1,22 +1,16 @@
 """
 PrivacyGuard Middleware
 
-Historically this enforced a P/R/S three-level privacy classification that
-stripped "S-level" fields (family income, health detail, etc.) from API
-responses, LLM prompts and exports.
+Enforces the P/R/S three-level privacy classification required by FR-A8 (P0):
+S-level fields and the D11 (隐私与敏感信息) archive domain are stripped at
+the code level from API responses, LLM prompts and exports.
 
-v5.0 is a PURELY VIRTUAL student system: every field -- including the D11
-"privacy-sensitive" archive domain -- is synthetic data produced by the LLM /
-rule pipeline. There is no real person and no real privacy to protect, so
-hiding these fields adds no value and only impoverishes the visible archive.
-Accordingly the enforcement is now DISABLED: all filters below are pass-through
-and every field is served and allowed to participate in computation.
+Every persona in this system is synthetic, but enforcement stays ENABLED:
+FR-A8 is a P0 acceptance requirement (T-P10), the guard is the single barrier
+that keeps real calibration data safe the moment any is ever introduced, and
+the platform's responsible-AI design demands it by default.
 
-The P/R/S field classification is retained purely as documentation of what was
-once considered sensitive, so enforcement could be re-enabled unchanged if REAL
-student data were ever introduced (the system currently ingests none).
-
-Reference: 技术设计文档 §3.5, §8.6 (original P/R/S design)
+Reference: 技术设计文档 §3.5, §8.6; 需求说明文档 FR-A8
 """
 from typing import Dict, List, Any, Optional
 import re
@@ -24,11 +18,10 @@ import re
 
 class PrivacyGuard:
     """
-    Privacy middleware (enforcement DISABLED for the virtual-student system).
+    Privacy middleware (FR-A8 enforcement ENABLED).
 
-    All ``filter_for_*`` methods are pass-through: every persona is synthetic,
-    so the full archive (including the D11 domain) is returned unchanged and
-    nothing is stripped from API responses, LLM prompts or exports.
+    All ``filter_for_*`` methods return a sanitized deep copy with S-level
+    fields and sensitive archive domains removed; inputs are never mutated.
     """
 
     # Field classification
@@ -61,13 +54,20 @@ class PrivacyGuard:
     @classmethod
     def filter_for_api(cls, persona: Dict) -> Dict:
         """
-        Return the persona for API responses UNCHANGED (all fields served).
+        Return the persona for API responses with S-level content stripped.
 
-        The old behaviour stripped S-level fields and the D11 archive domain;
-        since all data is synthetic that filtering is disabled and the complete
-        23-domain archive is exposed to the frontend.
+        Removes the D11 archive domain and every S-level field (recursively),
+        then adjusts domain/field counters so the response stays consistent.
+        The input persona is never mutated.
         """
-        return dict(persona)
+        return cls._sanitize(persona)
+
+    @classmethod
+    def _sanitize(cls, data: Dict) -> Dict:
+        """Return a deep copy of ``data`` without S-level fields/domains."""
+        cleaned = cls._remove_sensitive_nested(dict(data))
+        cls._strip_sensitive_domains(cleaned)
+        return cleaned
 
     @classmethod
     def _strip_sensitive_domains(cls, persona: Dict) -> None:
@@ -90,16 +90,18 @@ class PrivacyGuard:
     @classmethod
     def filter_for_prompt(cls, persona: Dict) -> Dict:
         """
-        Return the persona for LLM prompts UNCHANGED (all fields available).
+        Return the persona for LLM prompts with S-level content stripped
+        (FR-A8: S-level fields never enter prompts).
         """
-        return dict(persona)
+        return cls._sanitize(persona)
 
     @classmethod
     def filter_for_export(cls, report: Dict) -> Dict:
         """
-        Return the report for export UNCHANGED (all fields available).
+        Return the export payload with S-level content stripped
+        (FR-A8: S-level fields never enter exports).
         """
-        return dict(report)
+        return cls._sanitize(report)
 
     @classmethod
     def scan_log(cls, text: str) -> List[str]:
@@ -108,13 +110,16 @@ class PrivacyGuard:
         Returns list of detected violations.
         """
         violations = []
+        # Word-boundary patterns: match the exact S-level field names without
+        # false-positives on legitimate look-alikes (family_conflict_level,
+        # mental_health_index, ...).
         sensitive_patterns = [
-            r"parenting_style_detail",
-            r"family_conflict",
-            r"mental_health",
-            r"medical_history",
-            r"financial_details",
-            r"tutoring_cost",
+            r"\bparenting_style_detail\b",
+            r"\bfamily_conflict\b",
+            r"\bmental_health_records\b",
+            r"\bmedical_history\b",
+            r"\bfinancial_details\b",
+            r"\btutoring_cost\b",
         ]
         for pattern in sensitive_patterns:
             if re.search(pattern, text, re.IGNORECASE):

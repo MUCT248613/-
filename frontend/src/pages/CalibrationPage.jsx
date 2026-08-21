@@ -31,14 +31,14 @@ export default function CalibrationPage() {
   }, [id])
 
   if (error) return <div className="error-box">{error}</div>
-  if (!data) return <div className="loading">正在加载校准诊断…</div>
+  if (!data) return <div className="loading">正在加载模型可信度分析…</div>
 
   const verdict = VERDICT_LABELS[data.verdict] || VERDICT_LABELS.marginal
 
   return (
     <div>
       <div className="page-header">
-        <h2>校准诊断</h2>
+        <h2>模型可信度</h2>
         <p>
           虚拟-参考认知参数对比（FR-F2）· BKT 参数校准 · KS 检验 · 保真度判定
         </p>

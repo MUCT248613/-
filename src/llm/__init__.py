@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - LLM Integration Module
+VirtualStudent Sandbox v6.0 - LLM Integration Module
 
 Provides unified access to Aliyun Bailian (DashScope) Qwen models with:
 - OpenAI-compatible endpoint
@@ -11,9 +11,11 @@ Provides unified access to Aliyun Bailian (DashScope) Qwen models with:
 Reference: 技术设计文档 §8.1, §8.7
 """
 import json
+import os
 import time
 import uuid
 import hashlib
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 
 # Preset Aliyun Bailian (百炼) Token Plan OpenAI-compatible endpoint.
@@ -32,6 +34,38 @@ DEFAULT_BASE_URL = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-m
 # (identity seed + narrative per student), and flash is several times faster and
 # cheaper than plus/max while being more than adequate for this workload.
 DEFAULT_MODEL = "qwen3.7-flash"
+# Pay-as-you-go (按量计费) DashScope endpoint. A standard Bailian API key
+# authenticates here; the Token Plan (套餐) endpoint above only accepts
+# subscription-bound keys. test_connection probes this alternative on 401.
+DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+# Local persistence so a backend restart keeps the configured key / endpoint.
+# Plain local file (dev tool); never echoed back through the API.
+_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "llm_config.json"
+
+
+def _load_persisted_config() -> Dict[str, Any]:
+    if "pytest" in os.sys.modules:  # tests must stay deterministic / offline
+        return {}
+    try:
+        if _CONFIG_PATH.exists():
+            return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _persist_config(api_key: str, base_url: str, default_model: str) -> None:
+    if "pytest" in os.sys.modules:  # never write side effects during tests
+        return
+    try:
+        _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CONFIG_PATH.write_text(
+            json.dumps({"api_key": api_key, "base_url": base_url,
+                        "default_model": default_model}, ensure_ascii=False),
+            encoding="utf-8")
+    except Exception:
+        pass
 
 
 class LLMClient:
@@ -58,6 +92,7 @@ class LLMClient:
         self.default_model = default_model
         self.cost_tracker = cost_tracker  # callback(call_record: dict)
         self._client = None
+        self.last_error: Optional[str] = None
         
         if self.api_key:
             try:
@@ -66,7 +101,7 @@ class LLMClient:
                 # hang run creation indefinitely (the OpenAI default is 600s).
                 # On timeout the call() wrapper degrades to the deterministic mock.
                 self._client = OpenAI(api_key=self.api_key, base_url=self.base_url,
-                                      timeout=120.0)
+                                      timeout=30.0)
             except ImportError:
                 self._client = None
     
@@ -78,7 +113,7 @@ class LLMClient:
     def call(self, prompt: str, model: Optional[str] = None,
              temperature: float = 0.7, max_tokens: int = 2000,
              response_format: Optional[Dict] = None,
-             system_prompt: str = "") -> str:
+             system_prompt: str = "", strict: bool = False) -> str:
         """
         Single LLM call with cost tracking and deterministic fallback.
         
@@ -97,9 +132,13 @@ class LLMClient:
         
         if self.is_live:
             try:
+                self.last_error = None
                 return self._call_live(prompt, model, temperature, max_tokens,
                                        response_format, system_prompt)
             except Exception as e:
+                self.last_error = f"{type(e).__name__}: {e}"
+                if strict:
+                    raise
                 # Graceful degradation: a transient LLM failure (rate limit,
                 # network hiccup, invalid model id) must not abort the whole
                 # simulation run. Fall back to the deterministic mock and log
@@ -254,6 +293,7 @@ class LLMClient:
             "call_id": str(uuid.uuid4()),
             "module": "llm",
             "model": model,
+            "live": not model.endswith("-mock"),
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "cost_yuan": round(cost, 6),
@@ -261,22 +301,77 @@ class LLMClient:
             "timestamp_ms": int(time.time() * 1000),
         }
         
+        _call_log.append(record)
+        if len(_call_log) > 100:
+            del _call_log[: len(_call_log) - 100]
+
         if self.cost_tracker:
             try:
                 self.cost_tracker(record)
             except Exception:
                 pass
 
+    def test_connection(self) -> Dict[str, Any]:
+        """Actually call the configured endpoint once (minimal prompt) and
+        report success / the exact error, so connectivity is verifiable."""
+        if not self.is_live:
+            return {"status": "offline",
+                    "reason": "未配置 API Key 或缺少 openai 依赖，当前为确定性离线模式"}
+        t0 = time.time()
+        try:
+            resp = self._client.chat.completions.create(
+                model=self.default_model,
+                messages=[{"role": "user", "content": "请只回复一个词：ok"}],
+                temperature=0.0, max_tokens=8,
+            )
+            return {"status": "ok", "model": self.default_model,
+                    "latency_ms": int((time.time() - t0) * 1000),
+                    "reply": (resp.choices[0].message.content or "").strip()[:50]}
+        except Exception as e:
+            result = {"status": "error", "model": self.default_model,
+                      "latency_ms": int((time.time() - t0) * 1000),
+                      "reason": f"{type(e).__name__}: {e}"}
+            if "invalid_api_key" in str(e) or "401" in str(e):
+                # Key/endpoint mismatch is the most common 401: probe the
+                # pay-as-you-go endpoint with the same key and suggest it.
+                if self.base_url.rstrip("/") != DASHSCOPE_BASE_URL.rstrip("/"):
+                    try:
+                        from openai import OpenAI
+                        alt = OpenAI(api_key=self.api_key, base_url=DASHSCOPE_BASE_URL,
+                                     timeout=30)
+                        alt.chat.completions.create(
+                            model=self.default_model,
+                            messages=[{"role": "user", "content": "请只回复一个词：ok"}],
+                            max_tokens=5)
+                        result["suggestion"] = (
+                            "该 Key 被当前端点拒绝，但在按量计费端点验证可用："
+                            f"请将 Base URL 改为 {DASHSCOPE_BASE_URL} 后保存。")
+                    except Exception:
+                        pass
+            return result
+
 
 # Module-level singleton for convenience
 _default_client: Optional[LLMClient] = None
 
+# Recent call records (live + mock) so usage is visible in the UI / logs
+_call_log: List[Dict[str, Any]] = []
+
+
+def get_call_log() -> List[Dict[str, Any]]:
+    return list(_call_log)
+
 
 def get_client() -> LLMClient:
-    """Get or create the default LLM client"""
+    """Get or create the default LLM client (restores persisted config)."""
     global _default_client
     if _default_client is None:
-        _default_client = LLMClient()
+        saved = _load_persisted_config()
+        _default_client = LLMClient(
+            api_key=saved.get("api_key") or None,
+            base_url=saved.get("base_url") or None,
+            default_model=saved.get("default_model") or DEFAULT_MODEL,
+        )
     return _default_client
 
 
@@ -296,6 +391,8 @@ def reconfigure_client(api_key: Optional[str] = None,
         prev.default_model if prev else DEFAULT_MODEL)
     _default_client = LLMClient(api_key=new_key, base_url=new_url,
                                 default_model=new_model)
+    _persist_config(_default_client.api_key, _default_client.base_url,
+                    _default_client.default_model)
     return _default_client
 
 

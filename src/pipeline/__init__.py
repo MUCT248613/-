@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Prefect DAG Orchestration
+VirtualStudent Sandbox v6.0 - Prefect DAG Orchestration
 
 Implements §7 流水线 DAG (Pipeline DAG) with the v3.0/v4.0 node structure:
   n1_load_realdata -> n2_fit_kc_model
@@ -132,8 +132,9 @@ def n4b_init_network(students: Dict, config: Dict) -> Dict:
     """M4: Initialize peer network by homophily."""
     from ..l_model.social_network import SocialNetworkEngine
     n = len(students["students"])
-    net = SocialNetworkEngine(n, init_density=config.get("init_density", 0.15),
-                              seed=config.get("seed", 42))
+    net = SocialNetworkEngine(n, init_density=config.get("init_density", 0.04),
+                              seed=config.get("seed", 42),
+                              profiles=students["students"] if isinstance(students, dict) else None)
     return {"network": net, "n_nodes": n}
 
 

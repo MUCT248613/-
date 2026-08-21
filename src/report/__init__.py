@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Report Module (M7 + M8)
+VirtualStudent Sandbox v6.0 - Report Module (M7 + M8)
 
 M7 报告卡 (Report Card): assembles a structured run report from calibration,
 simulation, gap, and ranking results.

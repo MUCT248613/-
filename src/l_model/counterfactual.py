@@ -1,5 +1,5 @@
 """
-VirtualStudent Sandbox v5.0 - Counterfactual Engine
+VirtualStudent Sandbox v6.0 - Counterfactual Engine
 
 Implements §4.8 反事实实验引擎 (Counterfactual Experiment Engine).
 
@@ -108,6 +108,32 @@ class Trajectory:
         return float(np.mean(values)) if values else 0.0
 
 
+def _builtin_modification_effects() -> Dict[str, Dict]:
+    return {
+        "remove_shadow_edu": {"shadow_hours_multiplier": 0.0},
+        "increase_parental_support": {"parent_support_delta": 0.3},
+        "forbid_romance": {"romance_enabled": False},
+        "switch_class": {"class_switch": True},
+        "add_tutoring": {"tutoring_hours_delta": 3.0},
+        "reduce_homework": {"homework_multiplier": 0.5},
+    }
+
+
+def _load_modification_effects() -> Dict[str, Dict]:
+    """YAML-first counterfactual table; built-ins are the fallback and are
+    merged under YAML-declared entries (single source of truth: config)."""
+    effects = _builtin_modification_effects()
+    try:
+        from ..delivery.intervention_delivery import load_counterfactual_catalog
+        for spec in load_counterfactual_catalog():
+            key = spec.get("key")
+            if key and isinstance(spec.get("effects"), dict):
+                effects[key] = spec["effects"]
+    except Exception:
+        pass
+    return effects
+
+
 class CounterfactualEngine:
     """
     反事实轨迹分流引擎 (Counterfactual Trajectory Branching Engine).
@@ -118,15 +144,10 @@ class CounterfactualEngine:
       3. Single-variable divergence (only the modification differs)
     """
     
-    # Supported modification types and their default effects
-    MODIFICATION_EFFECTS = {
-        "remove_shadow_edu": {"shadow_hours_multiplier": 0.0},
-        "increase_parental_support": {"parent_support_delta": 0.3},
-        "forbid_romance": {"romance_enabled": False},
-        "switch_class": {"class_switch": True},
-        "add_tutoring": {"tutoring_hours_delta": 3.0},
-        "reduce_homework": {"homework_multiplier": 0.5},
-    }
+    # Supported modification types and their default effects (YAML-first,
+    # see _load_modification_effects; config/intervention_delivery.yaml is
+    # the single source of truth).
+    MODIFICATION_EFFECTS = _load_modification_effects()
     
     def __init__(self, max_branches: int = 5):
         self.max_branches = max_branches
@@ -207,6 +228,33 @@ class CounterfactualEngine:
         
         return state
     
+    def apply_custom_effects(self, state, effects):
+        """Apply researcher-supplied counterfactual effects."""
+        for sid, student in state.students.items():
+            for key, val in effects.items():
+                if key == "shadow_hours_multiplier":
+                    student["shadow_hours"] = student.get("shadow_hours", 0.0) * float(val)
+                elif key == "parent_support_delta":
+                    student["parent_support"] = min(1.0, student.get("parent_support", 0.5) + float(val))
+                elif key == "romance_enabled":
+                    student["romance_enabled"] = bool(val)
+                elif key == "tutoring_hours_delta":
+                    student["tutoring_hours"] = student.get("tutoring_hours", 0.0) + float(val)
+                elif key == "homework_multiplier":
+                    student["homework_load"] = student.get("homework_load", 1.0) * float(val)
+                elif key == "class_switch" and val:
+                    pass
+                else:
+                    student[key] = val
+        if effects.get("class_switch"):
+            import numpy as np
+            rng = np.random.RandomState(state.seed)
+            for edge in state.network_edges:
+                if rng.random() < 0.5:
+                    edge["weight"] = float(rng.uniform(0.1, 0.5))
+        return state
+
+
     def _simulate_branch(self, state: SimulationState, days: int,
                          seed: int) -> Dict[str, List[Dict]]:
         """
@@ -300,6 +348,23 @@ class CounterfactualEngine:
         
         g, ci_low, ci_up = VirtualEffectSizeCalculator.compute_hedges_g(base_vals, mod_vals)
         
+        # ANCOVA-adjusted effect size using early trajectory as baseline covariate
+        ancova_g, ancova_ci_lo, ancova_ci_hi, ancova_diff = 0.0, 0.0, 0.0, 0.0
+        try:
+            n_pts = min(len(base_vals), len(mod_vals))
+            if n_pts >= 6:
+                split = max(1, n_pts // 3)
+                base_pre = base_vals[:split]
+                base_post = base_vals[split:]
+                mod_pre = mod_vals[:split]
+                mod_post = mod_vals[split:]
+                from ..delivery.intervention_delivery import VirtualEffectSizeCalculator
+                ancova_g, ancova_ci_lo, ancova_ci_hi, ancova_diff = (
+                    VirtualEffectSizeCalculator.compute_ancova_g(
+                        base_pre, base_post, mod_pre, mod_post))
+        except Exception:
+            pass
+
         return {
             "baseline_mean": float(np.mean(base_vals)),
             "modified_mean": float(np.mean(mod_vals)),
@@ -307,10 +372,14 @@ class CounterfactualEngine:
             "ci_95": [float(ci_low), float(ci_up)],
             "trajectory_baseline": base_vals.tolist(),
             "trajectory_modified": mod_vals.tolist(),
+            "ancova_g": float(ancova_g),
+            "ancova_ci_95": [float(ancova_ci_lo), float(ancova_ci_hi)],
+            "ancova_adjusted_diff": float(ancova_diff),
         }
     
     def create_run(self, baseline_state: SimulationState,
-                   modification: Any, days: int, seed: int = 42) -> Dict[str, Any]:
+                   modification: Any, days: int, seed: int = 42,
+                   custom_effects: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         High-level API: create a full counterfactual run record.
         
@@ -324,12 +393,15 @@ class CounterfactualEngine:
         cf_id = f"CF_{uuid.uuid4().hex[:8].upper()}"
         
         # Normalize modification to a callable
-        if callable(modification):
+        if custom_effects:
+            mod_desc = {"custom_effects": custom_effects}
+            def mod_fn(state, _eff=custom_effects):
+                return self.apply_custom_effects(state, _eff)
+        elif callable(modification):
             mod_fn = modification
             mod_desc = {"custom": True}
         elif isinstance(modification, dict):
             mod_desc = modification
-            # Build a combined modifier from named flags
             names = [k for k, v in modification.items() if v]
             def mod_fn(state, _names=names):
                 for n in _names:

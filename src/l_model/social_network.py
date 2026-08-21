@@ -25,10 +25,11 @@ class SocialNetworkEngine:
     _PRUNE_THRESHOLD = 0.12     # edges weaker than this may dissolve
     _FORM_SIMILARITY = 0.82     # only form ties between very similar students
     _MIN_EDGES_FACTOR = 0.5     # never prune below factor * n_students edges
-    _TARGET_DENSITY = 0.30      # realistic sparse ceiling; formation stops here
+    _TARGET_DENSITY = 0.05      # realistic sparse ceiling; formation stops here
 
-    def __init__(self, n_students: int = None, init_density: float = 0.15,
-                 seed: int = None, node_ids: Optional[list] = None):
+    def __init__(self, n_students: int = None, init_density: float = 0.04,
+                 seed: int = None, node_ids: Optional[list] = None,
+                 profiles: Optional[Dict] = None):
         """
         Args:
             n_students: Number of students (used when node_ids is not given)
@@ -42,44 +43,84 @@ class SocialNetworkEngine:
         """
         if seed is not None:
             np.random.seed(seed)
-        
+
         self.graph = nx.Graph()
         if node_ids is not None:
             ids = list(node_ids)
         else:
             ids = [f"S{i:04d}" for i in range(n_students or 0)]
         self.n_students = len(ids)
-        
-        # Initialize nodes
-        for nid in ids:
-            self.graph.add_node(nid)
-        
-        # Initialize edges
-        self._initialize_edges(init_density)
+        self.profiles = profiles or {}
 
         # Dedicated RNG for topological evolution so edge formation / pruning
         # is reproducible WITHOUT perturbing the global np.random stream that
         # the daily scene / event simulation relies on.
         self._topo_rng = np.random.RandomState(
             None if seed is None else seed + 1)
+
+        # Initialize nodes
+        for nid in ids:
+            self.graph.add_node(nid)
+
+        # Initialize edges
+        self._initialize_edges(init_density)
     
     def _initialize_edges(self, density: float) -> None:
-        """Initialize random edges with given density"""
-        n_possible = self.n_students * (self.n_students - 1) // 2
-        n_edges = int(n_possible * density)
-        
+        """Initialize a sparse, homophily-structured friendship network.
+
+        With student profiles each student forms a small personal circle
+        (3-8 ties) biased toward similar peers; tie strengths are drawn from
+        a broad distribution so weak / mid ties dominate and only a few ties
+        are strong (matching empirical adolescent friendship networks).
+        Without profiles, fall back to uniform random edges at ``density``.
+        """
         nodes = list(self.graph.nodes())
+        n = len(nodes)
+        if n < 2:
+            return
+
+        if self.profiles:
+            rng = self._topo_rng
+            for i, a in enumerate(nodes):
+                ach_a = self.profiles.get(a, {}).get("achievement_score", 50)
+                k = int(rng.randint(3, 9))  # personal circle of 3..8 friends
+                for _ in range(k):
+                    for _attempt in range(10):
+                        j = int(rng.randint(0, n))
+                        if j == i:
+                            continue
+                        b = nodes[j]
+                        if self.graph.has_edge(a, b):
+                            continue
+                        ach_b = self.profiles.get(b, {}).get("achievement_score", 50)
+                        sim = max(0.0, 1.0 - min(abs(ach_a - ach_b) / 40.0, 1.0))
+                        if sim < 0.3 and rng.rand() > 0.15:
+                            continue  # mostly befriend similar peers
+                        w = float(np.clip(0.1 + 0.8 * sim * rng.beta(2, 2), 0.05, 1.0))
+                        # per-tie heterogeneity: closeness converges toward
+                        # similarity * bias instead of similarity alone, so
+                        # weak / mid / strong tiers all persist over time
+                        self.graph.add_edge(
+                            a, b, weight=w, bias=float(rng.uniform(0.35, 1.0)))
+                        break
+            return
+
+        n_possible = n * (n - 1) // 2
+        n_edges = int(n_possible * density)
         edges_added = 0
         attempts = 0
-        
+
         while edges_added < n_edges and attempts < n_edges * 10:
-            i, j = np.random.choice(self.n_students, 2, replace=False)
-            node_i, node_j = nodes[i], nodes[j]
-            
+            i, j = np.random.choice(n, 2, replace=False)
+            node_i, node_j = nodes[int(i)], nodes[int(j)]
+
             if not self.graph.has_edge(node_i, node_j):
-                self.graph.add_edge(node_i, node_j, weight=0.5)
+                w = float(np.clip(0.05 + 0.9 * np.random.beta(2, 3), 0.05, 1.0))
+                self.graph.add_edge(
+                    node_i, node_j, weight=w,
+                    bias=float(np.random.uniform(0.35, 1.0)))
                 edges_added += 1
-            
+
             attempts += 1
     
     def propagate_influence(self, students: Dict, day: int) -> Dict:
@@ -150,12 +191,16 @@ class SocialNetworkEngine:
             ach_u = student_u.get("achievement_score", 50)
             ach_v = student_v.get("achievement_score", 50)
             
-            # Similarity: 1 if ach_u == ach_v, 0 if diff >= 100
-            similarity = 1.0 - min(abs(ach_u - ach_v) / 100.0, 1.0)
-            
-            # Update weight: decay + boost by similarity
+            # Similarity: 1 if equal, 0 if diff >= 40 (stricter so weights
+            # stay differentiated instead of converging to ~0.9 for everyone)
+            similarity = max(0.0, 1.0 - min(abs(ach_u - ach_v) / 40.0, 1.0))
+
+            # Update weight: decay + boost toward similarity * bias. The
+            # per-edge bias models intrinsic closeness so ties between equally
+            # similar students still settle at different strengths.
             current_weight = self.graph[u][v].get("weight", 0.5)
-            new_weight = 0.9 * current_weight + 0.1 * similarity
+            bias = self.graph[u][v].get("bias", 0.7)
+            new_weight = 0.9 * current_weight + 0.1 * (similarity * bias)
             
             if new_weight > current_weight:
                 stats["strengthened"] += 1
@@ -179,10 +224,10 @@ class SocialNetworkEngine:
         return stats
 
     def _similarity(self, students: Dict, a: str, b: str) -> float:
-        """Achievement similarity in [0, 1]: 1 if equal, 0 if diff >= 100."""
+        """Achievement similarity in [0, 1]: 1 if equal, 0 if diff >= 40."""
         ach_a = students.get(a, {}).get("achievement_score", 50)
         ach_b = students.get(b, {}).get("achievement_score", 50)
-        return 1.0 - min(abs(ach_a - ach_b) / 100.0, 1.0)
+        return max(0.0, 1.0 - min(abs(ach_a - ach_b) / 40.0, 1.0))
 
     def _evolve_topology(self, students: Dict) -> Tuple[int, int]:
         """Grow and prune the graph so its topology (hence density / clustering
@@ -239,7 +284,12 @@ class SocialNetworkEngine:
             sim = self._similarity(students, a, b)
             if sim < self._FORM_SIMILARITY:
                 continue
-            self.graph.add_edge(a, b, weight=float(sim))
+            self.graph.add_edge(
+                a, b,
+                weight=float(np.clip(0.15 + 0.75 * sim * self._topo_rng.beta(2, 2),
+                                 0.05, 1.0)),
+                bias=float(self._topo_rng.uniform(0.35, 1.0)),
+            )
             formed += 1
 
         return formed, pruned

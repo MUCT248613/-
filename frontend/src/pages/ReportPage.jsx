@@ -75,6 +75,15 @@ export default function ReportPage() {
           <button type="button" onClick={() => downloadMarkdown(report.markdown, report.run_id)}>
             导出 Markdown 报告
           </button>
+          <button type="button" className="secondary" onClick={() => exportAsHTML(report, report.run_id)}>
+            导出 HTML (可打印PDF)
+          </button>
+          <button type="button" className="secondary" onClick={() => {
+            const es = (report.report_card?.effect_sizes || []).map(e => ({ name: e.intervention_id, g: e.hedges_g }))
+            exportChartAsSVG(es, `效应量_${report.run_id}`)
+          }}>
+            导出效应量图 (SVG)
+          </button>
           <button type="button" className="secondary" onClick={copyMarkdown}>
             {copied ? '已复制 ✓' : '复制到剪贴板'}
           </button>
