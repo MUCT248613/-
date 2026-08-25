@@ -1,0 +1,80 @@
+{
+  "case_id": "case-20260821-100",
+  "question": "家长自主支持相较控制监督是否改善学生学习动机、坚持度与成绩增益？",
+  "seed": 20260821,
+  "n_students": 100,
+  "n_teachers": 20,
+  "n_parents": 100,
+  "sim_days": 90,
+  "data_source": "simulation (synthetic personas; no ASSISTments/EdNet files loaded)",
+  "model": "offline deterministic fallback (llm_live=false)",
+  "code_version": "v6.0 / commit f15228a",
+  "effects": [
+    {
+      "intervention_id": "I1_worked_examples",
+      "scene": "school",
+      "hedges_g": 0.3087,
+      "ci_95": [
+        -0.3771,
+        0.9946
+      ],
+      "n_treatment": 16,
+      "n_control": 20,
+      "control_mean_gain": 1.299,
+      "treatment_mean_gain": 4.106
+    },
+    {
+      "intervention_id": "I2_spaced_practice",
+      "scene": "school",
+      "hedges_g": 0.4143,
+      "ci_95": [
+        -0.2749,
+        1.1036
+      ],
+      "n_treatment": 16,
+      "n_control": 20,
+      "control_mean_gain": 1.299,
+      "treatment_mean_gain": 5.282
+    },
+    {
+      "intervention_id": "I3_feedback",
+      "scene": "school",
+      "hedges_g": 0.551,
+      "ci_95": [
+        -0.144,
+        1.246
+      ],
+      "n_treatment": 16,
+      "n_control": 20,
+      "control_mean_gain": 1.299,
+      "treatment_mean_gain": 6.371
+    },
+    {
+      "intervention_id": "I4_retrieval_practice",
+      "scene": "school",
+      "hedges_g": 0.3306,
+      "ci_95": [
+        -0.3559,
+        1.0171
+      ],
+      "n_treatment": 16,
+      "n_control": 20,
+      "control_mean_gain": 1.299,
+      "treatment_mean_gain": 4.691
+    },
+    {
+      "intervention_id": "I5_sleep_hygiene",
+      "scene": "home",
+      "hedges_g": 0.2625,
+      "ci_95": [
+        -0.4222,
+        0.9472
+      ],
+      "n_treatment": 16,
+      "n_control": 20,
+      "control_mean_gain": 1.299,
+      "treatment_mean_gain": 3.779
+    }
+  ],
+  "interpretation": "所有 95% CI 均跨零；I3_feedback 的点估计最高，但只能作为方向性候选，不能直接升级为真人实验结论。"
+}
