@@ -89,6 +89,9 @@ class StudentProfileResponse(BaseModel):
     gender: Optional[str] = None
     grade: Optional[str] = None
     achievement_score: Optional[float] = None
+    # Achievement before the multi-day simulation. Counterfactual analyses
+    # branch from this value, while achievement_score is the post-run state.
+    baseline_achievement_score: Optional[float] = None
     motivation_level: Optional[float] = None
     personality_tags: Optional[List[str]] = None
     interests: Optional[List[str]] = None
@@ -223,6 +226,7 @@ class CounterfactualCreateRequest(BaseModel):
     custom_effects: Optional[Dict[str, Any]] = None
     days: int = Field(default=30, ge=1, le=365)
     seed: Optional[int] = None
+    student_id: Optional[str] = None
 
 
 class CounterfactualCreateResponse(BaseModel):
@@ -231,6 +235,8 @@ class CounterfactualCreateResponse(BaseModel):
     run_id: str
     modification: Dict[str, Any]
     status: str
+    scope: str = "cohort"
+    student_id: Optional[str] = None
 
 
 class CounterfactualComparisonResponse(BaseModel):
@@ -238,6 +244,10 @@ class CounterfactualComparisonResponse(BaseModel):
     cf_id: str
     baseline_mean: float
     modified_mean: float
+    baseline_final: Optional[float] = None
+    modified_final: Optional[float] = None
+    final_delta: Optional[float] = None
+    average_delta: Optional[float] = None
     effect_size_g: float
     ci_95: List[float]
     trajectory_baseline: List[float]
@@ -245,6 +255,8 @@ class CounterfactualComparisonResponse(BaseModel):
     ancova_g: Optional[float] = None
     ancova_ci_95: Optional[List[float]] = None
     ancova_adjusted_diff: Optional[float] = None
+    scope: str = "cohort"
+    student_id: Optional[str] = None
 
 
 # ============ Report / Deliverable Center (M7 + M8) ============

@@ -704,13 +704,20 @@ def list_students(run_id: str, page: int = 1, page_size: int = 20):
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     
     students = list(_runs[run_id]["students"].values())
+    initial_students = _runs[run_id].get("students_initial", {})
     total = len(students)
     start = (page - 1) * page_size
     end = start + page_size
     page_students = students[start:end]
 
     # Apply PrivacyGuard filter
-    filtered = [PrivacyGuard.filter_for_api(s) for s in page_students]
+    filtered = []
+    for student in page_students:
+        item = PrivacyGuard.filter_for_api(student)
+        initial = initial_students.get(student.get("student_id"), {})
+        item["baseline_achievement_score"] = initial.get(
+            "achievement_score", student.get("achievement_score"))
+        filtered.append(item)
 
     return StudentListResponse(
         total=total,
@@ -732,6 +739,9 @@ def get_student_profile(run_id: str, student_id: str):
     
     # PrivacyGuard: remove S-level fields
     filtered = PrivacyGuard.filter_for_api(students[student_id])
+    initial = _runs[run_id].get("students_initial", {}).get(student_id, {})
+    filtered["baseline_achievement_score"] = initial.get(
+        "achievement_score", students[student_id].get("achievement_score"))
     return StudentProfileResponse(**filtered)
 
 
@@ -1110,7 +1120,9 @@ def create_counterfactual(run_id: str, request: CounterfactualCreateRequest):
     
     # Build a SimulationState from the run's students + social network so that
     # every modification (incl. switch_class, which reshuffles edges) has effect.
-    students = _runs[run_id].get("students", {})
+    students = _runs[run_id].get("students_initial") or _runs[run_id].get("students", {})
+    if request.student_id and request.student_id not in students:
+        raise HTTPException(status_code=404, detail=f"Student {request.student_id} not found")
     network = _runs[run_id].get("network", {})
     state = SimulationState(
         students=students,
@@ -1119,20 +1131,26 @@ def create_counterfactual(run_id: str, request: CounterfactualCreateRequest):
     )
     
     # Run the real counterfactual engine
-    record = _cf_engine.create_run(
-        baseline_state=state,
-        modification=request.modification,
-        days=request.days,
-        seed=_runs[run_id].get("seed", 42),
-        custom_effects=request.custom_effects,
-    )
+    try:
+        record = _cf_engine.create_run(
+            baseline_state=state,
+            modification=request.modification,
+            days=request.days,
+            seed=_runs[run_id].get("seed", 42),
+            custom_effects=request.custom_effects,
+            student_id=request.student_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     record["base_run_id"] = run_id
     
     return CounterfactualCreateResponse(
         cf_id=record["cf_id"],
         run_id=run_id,
         modification=request.modification,
-        status="completed"
+        status="completed",
+        scope="student" if request.student_id else "cohort",
+        student_id=request.student_id,
     )
 
 
@@ -1152,6 +1170,10 @@ def get_counterfactual_comparison(run_id: str, cf_id: str):
         cf_id=cf_id,
         baseline_mean=cmp.get("baseline_mean", 0.0),
         modified_mean=cmp.get("modified_mean", 0.0),
+        baseline_final=cmp.get("baseline_final"),
+        modified_final=cmp.get("modified_final"),
+        final_delta=cmp.get("final_delta"),
+        average_delta=cmp.get("average_delta"),
         effect_size_g=cmp.get("effect_size_g", 0.0),
         ci_95=cmp.get("ci_95", [0.0, 0.0]),
         trajectory_baseline=cmp.get("trajectory_baseline", []),
@@ -1159,6 +1181,8 @@ def get_counterfactual_comparison(run_id: str, cf_id: str):
         ancova_g=cmp.get("ancova_g"),
         ancova_ci_95=cmp.get("ancova_ci_95"),
         ancova_adjusted_diff=cmp.get("ancova_adjusted_diff"),
+        scope=cmp.get("scope", "cohort"),
+        student_id=cmp.get("student_id"),
     )
 
 
@@ -1826,10 +1850,25 @@ def get_catalog():
             "cost_yuan": float(spec.get("cost_yuan", 0.0)),
         })
     counterfactuals = [
-        {"key": m.get("key"), "label": m.get("label") or m.get("key")}
+        {
+            "key": m.get("key"),
+            "label": m.get("label") or m.get("key"),
+            "effects": m.get("effects") or {},
+        }
         for m in load_counterfactual_catalog() if m.get("key")
     ]
-    return {"interventions": interventions, "counterfactuals": counterfactuals}
+    # Expose the same bounds used by the engine so other clients cannot drift
+    # from the researcher's allowed parameter space.
+    custom_effects = [
+        {"key": key, "min": bounds[0], "max": bounds[1]}
+        for key, bounds in CounterfactualEngine.CUSTOM_EFFECT_BOUNDS.items()
+        if key not in ("romance_enabled", "class_switch")
+    ]
+    return {
+        "interventions": interventions,
+        "counterfactuals": counterfactuals,
+        "custom_effects": custom_effects,
+    }
 
 
 # ============ Human-in-the-Loop (FR-F5) ============

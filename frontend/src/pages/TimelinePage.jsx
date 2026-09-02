@@ -48,6 +48,8 @@ export default function TimelinePage() {
   const [students, setStudents] = useState([])
   const [sid, setSid] = useState('')
   const [timeline, setTimeline] = useState(null)
+  const [timelineDays, setTimelineDays] = useState([])
+  const [selectedDay, setSelectedDay] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -72,18 +74,34 @@ export default function TimelinePage() {
       .catch((e) => setError(e.message))
   }, [id])
 
-  // Timeline: load timeline for selected student
+  // Timeline: load all available days for the selected student. The selected
+  // day is then switched locally so date navigation does not refetch data.
   useEffect(() => {
     if (!sid || tab !== 'timeline') return
     let cancelled = false
     setLoading(true)
+    setTimeline(null)
+    setTimelineDays([])
     api
-      .getTimeline(id, sid)
-      .then((t) => !cancelled && setTimeline(t))
+      .getFullTimeline(id, sid)
+      .then((res) => {
+        if (cancelled) return
+        const days = Array.isArray(res.days) ? res.days : []
+        setTimelineDays(days)
+        const idx = Math.max(0, days.length - 1)
+        setSelectedDay(idx)
+        setTimeline(days[idx] || null)
+      })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false))
     return () => { cancelled = true }
   }, [id, sid, tab])
+
+  const selectTimelineDay = (value) => {
+    const idx = Number(value)
+    setSelectedDay(idx)
+    setTimeline(timelineDays[idx] || null)
+  }
 
   // Life course: load courses for selected students
   useEffect(() => {
@@ -175,6 +193,19 @@ export default function TimelinePage() {
               ))}
             </select>
           </div>
+
+          {timelineDays.length > 0 && (
+            <div className="field" style={{ maxWidth: 320 }}>
+              <label>选择日期（共 {timelineDays.length} 天）</label>
+              <select value={selectedDay} onChange={(e) => selectTimelineDay(e.target.value)}>
+                {timelineDays.map((day, index) => (
+                  <option key={`${day.sim_date}-${index}`} value={index}>
+                    第 {index + 1} 天 · {day.sim_date}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {error && <div className="error-box">{error}</div>}
           {loading && <div className="loading">{'\u52a0\u8f7d\u4e2d\u2026'}</div>}

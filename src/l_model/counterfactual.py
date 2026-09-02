@@ -148,11 +148,112 @@ class CounterfactualEngine:
     # see _load_modification_effects; config/intervention_delivery.yaml is
     # the single source of truth).
     MODIFICATION_EFFECTS = _load_modification_effects()
+    # Hard bounds keep researcher inputs in a plausible simulation range.
+    CUSTOM_EFFECT_BOUNDS = {
+        "achievement_rate_delta": (-0.2, 0.2),
+        "motivation_delta": (-0.3, 0.3),
+        "parent_support_delta": (-0.5, 0.5),
+        "shadow_hours_multiplier": (0.0, 1.5),
+        "tutoring_hours_delta": (-3.0, 4.0),
+        "homework_multiplier": (0.5, 1.5),
+        "fatigue_delta": (-20.0, 20.0),
+        "stress_delta": (-20.0, 20.0),
+        "emotion_delta": (-20.0, 20.0),
+        "romance_enabled": (0.0, 1.0),
+        "class_switch": (0.0, 1.0),
+    }
     
     def __init__(self, max_branches: int = 5):
         self.max_branches = max_branches
         self._branches: Dict[str, Dict] = {}
+
+    @classmethod
+    def normalize_custom_effects(cls, effects: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and clamp researcher inputs before they alter a state."""
+        normalized = {}
+        for key, value in (effects or {}).items():
+            if key not in cls.CUSTOM_EFFECT_BOUNDS:
+                raise ValueError(f"不支持的反事实变量: {key}")
+            if key in ("romance_enabled", "class_switch"):
+                normalized[key] = bool(value)
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"反事实变量 {key} 必须是数字")
+            if not np.isfinite(number):
+                raise ValueError(f"反事实变量 {key} 必须是有限数值")
+            low, high = cls.CUSTOM_EFFECT_BOUNDS[key]
+            normalized[key] = float(np.clip(number, low, high))
+        return normalized
+
+    @staticmethod
+    def _apply_effects_to_student(student: Dict[str, Any], effects: Dict[str, Any]) -> None:
+        """Apply bounded state changes shared by named and custom branches."""
+        # Keep a persistent, interpretable daily treatment channel in addition
+        # to the changed latent state. Without this, one-time wellbeing edits
+        # are washed out by the daily random drift before they can affect
+        # learning, making otherwise meaningful interventions look like no-ops.
+        daily_bonus = float(student.get("_cf_daily_bonus", 0.0))
+        if "shadow_hours_multiplier" in effects:
+            old_hours = float(student.get("shadow_hours", 0.0))
+            new_hours = float(np.clip(
+                old_hours * effects["shadow_hours_multiplier"], 0, 8))
+            student["shadow_hours"] = new_hours
+            daily_bonus += (new_hours - old_hours) * 0.015
+        if "parent_support_delta" in effects:
+            support_delta = float(effects["parent_support_delta"])
+            student["parent_support"] = float(np.clip(
+                student.get("parent_support", 0.5) + support_delta, 0, 1))
+            daily_bonus += support_delta * 0.10
+        if "romance_enabled" in effects:
+            student["romance_enabled"] = bool(effects["romance_enabled"])
+        if "tutoring_hours_delta" in effects:
+            tutoring_delta = float(effects["tutoring_hours_delta"])
+            student["tutoring_hours"] = float(np.clip(
+                student.get("tutoring_hours", 0.0) + tutoring_delta, 0, 8))
+            daily_bonus += tutoring_delta * 0.012
+        if "homework_multiplier" in effects:
+            old_homework = float(student.get("homework_load", 1.0))
+            new_homework = float(np.clip(
+                old_homework * effects["homework_multiplier"], 0.3, 2.0))
+            student["homework_load"] = new_homework
+            daily_bonus += (new_homework - old_homework) * 0.04
+        # This is a rate applied on each simulated day, not a one-time score jump.
+        if "achievement_rate_delta" in effects:
+            student["_cf_achievement_rate_delta"] = float(effects["achievement_rate_delta"])
+        # Backward compatibility for persisted experiments using the old key.
+        if "achievement_delta" in effects:
+            student["_cf_achievement_rate_delta"] = float(np.clip(effects["achievement_delta"], -0.2, 0.2))
+        if "motivation_delta" in effects:
+            motivation_delta = float(effects["motivation_delta"])
+            student["motivation"] = float(np.clip(
+                student.get("motivation", 0.5) + motivation_delta, 0, 1))
+            daily_bonus += motivation_delta * 0.20
+        for state_key in ("fatigue", "stress", "emotion"):
+            delta_key = f"{state_key}_delta"
+            if delta_key in effects:
+                state_delta = float(effects[delta_key])
+                student[state_key] = float(np.clip(
+                    student.get(state_key, 0.0) + state_delta, 0, 100))
+                # Lower fatigue/stress and higher emotion improve effective
+                # learning over the whole branch, not just on day one.
+                direction = -1.0 if state_key in ("fatigue", "stress") else 1.0
+                scale = {"fatigue": 0.003, "stress": 0.002, "emotion": 0.002}[state_key]
+                daily_bonus += direction * state_delta * scale
+        student["_cf_daily_bonus"] = float(np.clip(daily_bonus, -0.25, 0.25))
     
+    def _branch_daily(self, baseline_state: SimulationState,
+                      modification: Callable[[SimulationState], SimulationState],
+                      days: int, seed: int = 42) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
+        """Run both cloned branches once and retain per-student daily states."""
+        base_state = baseline_state.clone()
+        mod_state = modification(baseline_state.clone())
+        return (
+            self._simulate_branch(base_state, days, seed),
+            self._simulate_branch(mod_state, days, seed),
+        )
+
     def branch(self, baseline_state: SimulationState,
                modification: Callable[[SimulationState], SimulationState],
                days: int, seed: int = 42) -> Tuple[Trajectory, Trajectory]:
@@ -168,16 +269,7 @@ class CounterfactualEngine:
         Returns:
             (baseline_trajectory, modified_trajectory)
         """
-        # Clone so both branches start from an identical origin
-        base_state = baseline_state.clone()
-        mod_state = baseline_state.clone()
-        
-        # Apply the modification ONLY to the modified branch
-        mod_state = modification(mod_state)
-        
-        # Simulate both with the same seed
-        base_daily = self._simulate_branch(base_state, days, seed)
-        mod_daily = self._simulate_branch(mod_state, days, seed)
+        base_daily, mod_daily = self._branch_daily(baseline_state, modification, days, seed)
         
         # Compare cohort-averaged trajectories (average treatment effect) so the
         # result is robust rather than dependent on a single arbitrary student.
@@ -185,6 +277,18 @@ class CounterfactualEngine:
         mod_traj = Trajectory.from_cohort("cohort", mod_daily)
         
         return base_traj, mod_traj
+
+    def branch_for_student(self, baseline_state: SimulationState,
+                           modification: Callable[[SimulationState], SimulationState],
+                           days: int, seed: int, student_id: str) -> Tuple[Trajectory, Trajectory]:
+        """Return baseline/modified trajectories for one student only."""
+        if student_id not in baseline_state.students:
+            raise ValueError(f"学生 {student_id} 不存在")
+        base_daily, mod_daily = self._branch_daily(baseline_state, modification, days, seed)
+        return (
+            Trajectory.from_states(student_id, base_daily[student_id]),
+            Trajectory.from_states(student_id, mod_daily[student_id]),
+        )
     
     def branch_by_name(self, baseline_state: SimulationState,
                        modification_name: str, days: int,
@@ -199,25 +303,8 @@ class CounterfactualEngine:
         """Apply a predefined modification by name to a state."""
         effects = self.MODIFICATION_EFFECTS.get(name, {})
         
-        for sid, student in state.students.items():
-            if "shadow_hours_multiplier" in effects:
-                student["shadow_hours"] = (
-                    student.get("shadow_hours", 0.0) * effects["shadow_hours_multiplier"]
-                )
-            if "parent_support_delta" in effects:
-                student["parent_support"] = min(
-                    1.0, student.get("parent_support", 0.5) + effects["parent_support_delta"]
-                )
-            if "romance_enabled" in effects and not effects["romance_enabled"]:
-                student["romance_enabled"] = False
-            if "tutoring_hours_delta" in effects:
-                student["tutoring_hours"] = (
-                    student.get("tutoring_hours", 0.0) + effects["tutoring_hours_delta"]
-                )
-            if "homework_multiplier" in effects:
-                student["homework_load"] = (
-                    student.get("homework_load", 1.0) * effects["homework_multiplier"]
-                )
+        for student in state.students.values():
+            self._apply_effects_to_student(student, effects)
         
         # Class switch: reshuffle network edges
         if effects.get("class_switch"):
@@ -230,24 +317,10 @@ class CounterfactualEngine:
     
     def apply_custom_effects(self, state, effects):
         """Apply researcher-supplied counterfactual effects."""
-        for sid, student in state.students.items():
-            for key, val in effects.items():
-                if key == "shadow_hours_multiplier":
-                    student["shadow_hours"] = student.get("shadow_hours", 0.0) * float(val)
-                elif key == "parent_support_delta":
-                    student["parent_support"] = min(1.0, student.get("parent_support", 0.5) + float(val))
-                elif key == "romance_enabled":
-                    student["romance_enabled"] = bool(val)
-                elif key == "tutoring_hours_delta":
-                    student["tutoring_hours"] = student.get("tutoring_hours", 0.0) + float(val)
-                elif key == "homework_multiplier":
-                    student["homework_load"] = student.get("homework_load", 1.0) * float(val)
-                elif key == "class_switch" and val:
-                    pass
-                else:
-                    student[key] = val
+        effects = self.normalize_custom_effects(effects)
+        for student in state.students.values():
+            self._apply_effects_to_student(student, effects)
         if effects.get("class_switch"):
-            import numpy as np
             rng = np.random.RandomState(state.seed)
             for edge in state.network_edges:
                 if rng.random() < 0.5:
@@ -293,6 +366,9 @@ class CounterfactualEngine:
                 tutoring = float(s.get("tutoring_hours", 0.0))
                 homework = float(s.get("homework_load", 1.0))
                 romance_off = not s.get("romance_enabled", True)
+                fatigue = float(s.get("fatigue", 30.0))
+                stress = float(s.get("stress", 30.0))
+                emotion = float(s.get("emotion", 55.0))
                 
                 # Daily gain model: base growth + modifiers + noise
                 gain = 0.10
@@ -302,17 +378,38 @@ class CounterfactualEngine:
                 gain += min(tutoring, 6.0) * 0.03
                 gain += min(homework, 2.0) * 0.05       # homework practice effect
                 gain += peer_support[sid] * 0.10        # peer/network effect
+                # Wellbeing variables are part of the causal path as well:
+                # lower fatigue/stress and higher emotion should translate
+                # into a modest but measurable learning-gain difference.
+                gain += (emotion - 50.0) * 0.001
+                gain -= stress * 0.0005
+                gain -= fatigue * 0.0003
+                gain += float(s.get("_cf_achievement_rate_delta", 0.0))
+                # Learning has diminishing returns near the 0-100 ceiling;
+                # use the same headroom to scale signal and noise.
+                headroom = float(np.clip((100.0 - ach) / 40.0, 0.08, 1.0))
+                # Heterogeneous response: students with more motivation and
+                # headroom can realize more of the same intervention dose.
+                self_efficacy = float((s.get("simulation_vector") or {}).get("self_efficacy", 0.5))
+                responsiveness = float(np.clip(
+                    0.65 + mot * 0.45 + self_efficacy * 0.20 + headroom * 0.20,
+                    0.65, 1.35))
+                gain += float(s.get("_cf_daily_bonus", 0.0)) * responsiveness
                 if romance_off:
                     gain += 0.05  # time reallocated to study
-                
-                ach = min(100.0, ach + gain + rng.normal(0, 0.5))
+
+                # Scale both signal and noise by remaining headroom so a
+                # tutoring change cannot jump a student straight to 100.
+                ach = float(np.clip(
+                    ach + gain * headroom + rng.normal(0, 0.35 * headroom + 0.04),
+                    0, 100))
                 fatigue = float(np.clip(
-                    s.get("fatigue", 30.0) + rng.uniform(0, 5)
+                    fatigue + rng.uniform(0, 5)
                     - shadow * 0.5 + homework * 1.5, 0, 100))
                 stress = float(np.clip(
-                    s.get("stress", 30.0) + rng.uniform(-2, 4), 0, 100))
+                    stress + rng.uniform(-2, 4), 0, 100))
                 emotion = float(np.clip(
-                    s.get("emotion", 55.0) + rng.uniform(-3, 3), 0, 100))
+                    emotion + rng.uniform(-3, 3), 0, 100))
                 
                 s.update({
                     "achievement_score": ach,
@@ -368,6 +465,10 @@ class CounterfactualEngine:
         return {
             "baseline_mean": float(np.mean(base_vals)),
             "modified_mean": float(np.mean(mod_vals)),
+            "baseline_final": float(base_vals[-1]),
+            "modified_final": float(mod_vals[-1]),
+            "final_delta": float(mod_vals[-1] - base_vals[-1]),
+            "average_delta": float(np.mean(mod_vals) - np.mean(base_vals)),
             "effect_size_g": float(g),
             "ci_95": [float(ci_low), float(ci_up)],
             "trajectory_baseline": base_vals.tolist(),
@@ -379,7 +480,8 @@ class CounterfactualEngine:
     
     def create_run(self, baseline_state: SimulationState,
                    modification: Any, days: int, seed: int = 42,
-                   custom_effects: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                   custom_effects: Optional[Dict[str, Any]] = None,
+                   student_id: Optional[str] = None) -> Dict[str, Any]:
         """
         High-level API: create a full counterfactual run record.
         
@@ -394,8 +496,9 @@ class CounterfactualEngine:
         
         # Normalize modification to a callable
         if custom_effects:
-            mod_desc = {"custom_effects": custom_effects}
-            def mod_fn(state, _eff=custom_effects):
+            normalized_effects = self.normalize_custom_effects(custom_effects)
+            mod_desc = {"custom_effects": normalized_effects}
+            def mod_fn(state, _eff=normalized_effects):
                 return self.apply_custom_effects(state, _eff)
         elif callable(modification):
             mod_fn = modification
@@ -411,8 +514,18 @@ class CounterfactualEngine:
             mod_fn = lambda s: s
             mod_desc = {"none": True}
         
-        base_traj, mod_traj = self.branch(baseline_state, mod_fn, days, seed)
+        base_daily, mod_daily = self._branch_daily(baseline_state, mod_fn, days, seed)
+        if student_id:
+            if student_id not in baseline_state.students:
+                raise ValueError(f"学生 {student_id} 不存在")
+            base_traj = Trajectory.from_states(student_id, base_daily[student_id])
+            mod_traj = Trajectory.from_states(student_id, mod_daily[student_id])
+        else:
+            base_traj = Trajectory.from_cohort("cohort", base_daily)
+            mod_traj = Trajectory.from_cohort("cohort", mod_daily)
         comparison = self.compare(base_traj, mod_traj)
+        comparison["scope"] = "student" if student_id else "cohort"
+        comparison["student_id"] = student_id
         
         record = {
             "cf_id": cf_id,

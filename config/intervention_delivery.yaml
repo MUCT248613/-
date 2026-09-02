@@ -112,3 +112,18 @@ counterfactual_modifications:
   - key: reduce_homework
     label: 减少作业
     effects: { homework_multiplier: 0.5 }
+  - key: boost_motivation
+    label: 提升学习动机
+    effects: { motivation_delta: 0.25 }
+  - key: improve_sleep
+    label: 改善睡眠与精力
+    effects: { fatigue_delta: -15.0, stress_delta: -8.0, emotion_delta: 8.0 }
+  - key: intensive_teacher_support
+    label: 加强教师支持
+    effects: { motivation_delta: 0.15, parent_support_delta: 0.15, achievement_rate_delta: 0.08 }
+  - key: reduce_stress
+    label: 减轻学业压力
+    effects: { stress_delta: -15.0, fatigue_delta: -8.0, motivation_delta: 0.1 }
+  - key: increase_study_time
+    label: 增加自主学习时间
+    effects: { shadow_hours_multiplier: 1.25, tutoring_hours_delta: 1.5, achievement_rate_delta: 0.05 }

@@ -18,6 +18,15 @@ rem ============================================================
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
+rem Prefer the project-local backend environment when it exists. This keeps
+rem the launcher aligned with the interpreter used to verify the API and
+rem avoids silently starting a different Python installation without FastAPI.
+if exist "%ROOT%.backend-venv\Scripts\python.exe" (
+    set "BACKEND_PY=%ROOT%.backend-venv\Scripts\python.exe"
+) else (
+    set "BACKEND_PY=python"
+)
+
 if not exist logs mkdir logs
 
 echo.
@@ -52,7 +61,7 @@ rem  The API import chain needs fastapi/uvicorn/pydantic/numpy/scipy/networkx/
 rem  duckdb/yaml. If any is absent (e.g. a fresh machine), install exactly the
 rem  missing ones so the backend window doesn't die with ModuleNotFoundError.
 set "MISSING_DEPS="
-for /f "usebackq delims=" %%m in (`python "%ROOT%scripts\check_backend_deps.py"`) do set "MISSING_DEPS=%%m"
+for /f "usebackq delims=" %%m in (`"%BACKEND_PY%" "%ROOT%scripts\check_backend_deps.py"`) do set "MISSING_DEPS=%%m"
 if defined MISSING_DEPS (
     echo [launcher] backend dependencies missing: %MISSING_DEPS%
     echo [launcher] running "pip install %MISSING_DEPS%" ...
@@ -62,7 +71,7 @@ if defined MISSING_DEPS (
 
 rem ---- Backend: uvicorn + auto-restart supervisor ----
 echo [launcher] starting backend   -^>  http://localhost:6668
-start "VS Backend (6668)" /D "%ROOT%" cmd /k python scripts\supervise_backend.py
+start "VS Backend (6668)" /D "%ROOT%" cmd /k "%BACKEND_PY%" scripts\supervise_backend.py
 
 rem ---- Frontend: Vite dev server (proxies /api to 6668) ----
 echo [launcher] starting frontend  -^>  http://localhost:4000

@@ -10,7 +10,6 @@ import TeachersPage from './pages/TeachersPage.jsx'
 import TimelinePage from './pages/TimelinePage.jsx'
 import ScenesPage from './pages/ScenesPage.jsx'
 import SubgroupsPage from './pages/SubgroupsPage.jsx'
-import NetworkPage from './pages/NetworkPage.jsx'
 import TriadNetworkPage from './pages/TriadNetworkPage.jsx'
 import QualityPage from './pages/QualityPage.jsx'
 import RobustnessPage from './pages/RobustnessPage.jsx'
@@ -38,7 +37,6 @@ const NAV_SECTIONS = [
       { to: 'personas', label: '学生画像' },
       { to: 'teachers', label: '教师档案' },
       { to: 'parents', label: '家长档案' },
-      { to: 'network', label: '社会网络' },
       { to: 'triad_network', label: '三方关系图' },
     ]
   },
@@ -166,7 +164,6 @@ function Shell() {
           <Route path="timeline" element={<TimelinePage />} />
           <Route path="scenes" element={<ScenesPage />} />
           <Route path="subgroups" element={<SubgroupsPage />} />
-          <Route path="network" element={<NetworkPage />} />
           <Route path="triad_network" element={<TriadNetworkPage />} />
           <Route path="life_course" element={<LifeCoursePage />} />
           <Route path="counterfactual" element={<CounterfactualPage />} />

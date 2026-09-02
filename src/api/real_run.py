@@ -21,6 +21,7 @@ consume (``students`` / ``teachers`` / ``parents`` / ``network`` /
 (``effect_sizes`` / ``day_timelines`` / ``network_evolution`` /
 ``scene_comparison`` / ``arms``).
 """
+import copy
 from dataclasses import asdict
 from datetime import datetime
 from typing import Dict, List
@@ -605,6 +606,11 @@ def build_real_run(run_id: str, config, progress_callback=None) -> Dict:
     intervention_engine, arms, control_ids = _assign_arms(
         students, config, arms_table)
 
+    # Counterfactuals must branch from the pre-simulation state. Using the
+    # final students here would start the what-if run after all growth had
+    # already happened and makes ceiling effects look like intervention gains.
+    initial_students = copy.deepcopy(students)
+
     # 3. L-Model 2.0 multi-agent simulation with intervention delivery wired in.
     report(52, "simulate", "启动多智能体仿真…")
     engine = LifeTimeEngineV2(
@@ -731,6 +737,7 @@ def build_real_run(run_id: str, config, progress_callback=None) -> Dict:
         "config": config.model_dump(),
         "seed": seed,
         "students": students,
+        "students_initial": initial_students,
         "teachers": teachers,
         "parents": parents,
         "sim_days": sim_days,

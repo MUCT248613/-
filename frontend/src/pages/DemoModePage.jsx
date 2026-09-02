@@ -5,7 +5,6 @@ import api from '../api.js'
 const DEMO_PAGES = [
   { path: 'dashboard', title: '执行摘要', duration: 8000, narration: '这是执行摘要页面，展示本次运行的核心发现和决策建议。评委可以在30秒内了解关键结论。' },
   { path: 'personas', title: '学生画像', duration: 6000, narration: '学生画像页面展示虚拟学生的23域219字段完整档案，包括认知参数、家庭背景、社交网络等。' },
-  { path: 'network', title: '社会网络', duration: 6000, narration: '社会网络可视化展示学生间的同伴关系，节点颜色表示成绩水平，连线粗细表示关系强度。' },
   { path: 'scenes', title: '场景效应对比', duration: 6000, narration: '场景效应对比展示同一干预在不同场景（学校/家庭/课外班/自学）的效果差异。' },
   { path: 'counterfactual', title: '反事实推演', duration: 8000, narration: '反事实推演允许研究者自由设定变量效果值，观察假设性干预的因果效应。' },
   { path: 'distortion', title: '失真热力图', duration: 6000, narration: '失真热力图展示干预×场景的失真程度，高失真区证据在排序时会被降权。' },
